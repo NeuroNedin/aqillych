@@ -7,7 +7,7 @@ import { verifyInitData, deriveWebhookSecret, equalSecret } from "./auth.js";
 import { handleUpdate, sendDigest, wireBot, botStatus } from "./bot.js";
 import { parseList } from "./parse.js";
 import { getState, saveLead, deleteLead, markWrote, bulkAdd, getMeta, setMeta } from "./db.js";
-import { localDate, localHour, STATUSES, SOURCES, PLAN, FOLLOW_DAYS } from "./domain.js";
+import { localDate, localHour, canonicalOrigin, STATUSES, SOURCES, PLAN, FOLLOW_DAYS } from "./domain.js";
 import { SCHEMA } from "./schema.js";
 
 // Таблицы создаются сами при первом обращении: так CRM разворачивается
@@ -74,8 +74,9 @@ async function handleApi(request, env, path, ctx) {
   await ensureSchema(env);
 
   // Телеграму можно рассказать о себе в фоне — ответ ждать не должен.
-  const origin = new URL(request.url).origin;
-  ctx.waitUntil(ensureWired(env, origin).catch((err) => console.error("wiring failed", err)));
+  // Адрес берём постоянный: мини-апп могли открыть по адресу сборки.
+  const appUrl = publicOrigin(env, new URL(request.url).origin);
+  ctx.waitUntil(ensureWired(env, appUrl).catch((err) => console.error("wiring failed", err)));
 
   const day = today(env);
   const nowIso = new Date().toISOString();
@@ -130,12 +131,17 @@ async function handleApi(request, env, path, ctx) {
  * Адрес мини-аппа нужен боту для кнопки «Открыть CRM». Задавать его руками
  * не обязательно: Telegram стучится к нам на наш же домен — запоминаем его.
  */
+function publicOrigin(env, origin) {
+  return env.APP_URL || canonicalOrigin(origin);
+}
+
 async function resolveAppUrl(env, origin) {
+  const wanted = publicOrigin(env, origin);
   if (env.APP_URL) return env.APP_URL;
   const stored = await getMeta(env.DB, "app_url");
-  if (origin && origin !== stored) {
-    await setMeta(env.DB, "app_url", origin);
-    return origin;
+  if (wanted && wanted !== stored) {
+    await setMeta(env.DB, "app_url", wanted);
+    return wanted;
   }
   return stored ?? "";
 }
@@ -173,7 +179,7 @@ const esc = (v) => String(v ?? "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<"
  * чтобы владелец мог увидеть причину молчания бота, не читая логи.
  */
 async function handleHealth(request, env) {
-  const origin = new URL(request.url).origin;
+  const origin = publicOrigin(env, new URL(request.url).origin);
   const rows = [];
   const add = (ok, label, note = "") => rows.push({ ok, label, note });
 
@@ -194,6 +200,7 @@ async function handleHealth(request, env) {
 
   add(wired === origin, "Бот знаком с приложением",
     wired === origin ? "" : wired ? `привязан к другому адресу: ${wired}` : "зайди в CRM из Telegram — приложение свяжет всё само");
+  add(true, "Постоянный адрес приложения", origin);
 
   let status = null;
   if (env.BOT_TOKEN) {

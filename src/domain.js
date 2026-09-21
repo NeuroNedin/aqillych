@@ -94,3 +94,15 @@ export function countPlan(logRows) {
   }
   return counts;
 }
+
+/**
+ * Постоянный адрес приложения по адресу, которым его открыли.
+ *
+ * Cloudflare даёт каждой сборке временный адрес вида
+ * https://<хеш>-<имя>.<аккаунт>.workers.dev. Снаружи такие адреса
+ * закрыты, поэтому привязывать к ним бота нельзя: Telegram получит
+ * 403. Отбрасываем префикс версии и получаем постоянный адрес.
+ */
+export function canonicalOrigin(origin) {
+  return String(origin || "").replace(/^(https?:\/\/)[0-9a-f]{8}-(?=[^.]+\.[^.]+\.workers\.dev)/i, "$1");
+}
