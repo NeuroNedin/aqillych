@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { verifyInitData, signInitData } from "../src/auth.js";
+import { verifyInitData, signInitData, deriveWebhookSecret } from "../src/auth.js";
 
 const TOKEN = "123456:AA-test-token-not-real";
 const USER = { id: 555, first_name: "Али", username: "ali" };
@@ -63,4 +63,25 @@ test("пустой и мусорный initData отклоняются без п
 test("без user подпись бесполезна", async () => {
   const initData = await signInitData({ auth_date: String(Math.floor(Date.now() / 1000)) }, TOKEN);
   assert.deepEqual(await verifyInitData(initData, TOKEN), { ok: false, reason: "no_user" });
+});
+
+test("секрет вебхука выводится из токена и повторяем", async () => {
+  const a = await deriveWebhookSecret(TOKEN);
+  assert.equal(a, await deriveWebhookSecret(TOKEN));
+  assert.notEqual(a, await deriveWebhookSecret("999999:OTHER-token"));
+});
+
+test("секрет вебхука годится для Telegram: 1-256 символов из A-Z a-z 0-9 _ -", async () => {
+  assert.match(await deriveWebhookSecret(TOKEN), /^[A-Za-z0-9_-]{1,256}$/);
+});
+
+test("без токена секрета нет — вебхук останется закрытым", async () => {
+  assert.equal(await deriveWebhookSecret(""), "");
+  assert.equal(await deriveWebhookSecret(undefined), "");
+});
+
+test("секрет вебхука не совпадает с подписью initData", async () => {
+  const secret = await deriveWebhookSecret(TOKEN);
+  const initData = await makeInitData();
+  assert.notEqual(secret, new URLSearchParams(initData).get("hash"));
 });

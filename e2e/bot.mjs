@@ -2,9 +2,10 @@
 // Запускается из test/e2e/run.sh.
 
 import { readFileSync, writeFileSync } from "node:fs";
+import { deriveWebhookSecret } from "../src/auth.js";
 
 const BASE = "http://localhost:8787";
-const SECRET = "local-webhook-secret";
+const SECRET = await deriveWebhookSecret("123456:AA-local-test-token");
 const LOG = process.argv[2];
 const OWNER = 555;
 let pass = 0, fail = 0, msgId = 100;

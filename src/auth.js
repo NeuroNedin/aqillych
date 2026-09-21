@@ -65,6 +65,20 @@ export async function verifyInitData(initData, botToken, { maxAgeSeconds = 86400
   return { ok: true, user };
 }
 
+/**
+ * Секрет вебхука выводится из токена бота, а не задаётся руками:
+ * одно значение меньше при установке и нечего потерять между шагами.
+ * Подобрать его, не зная токена, нельзя — а токен знают только
+ * владелец бота и Telegram.
+ */
+export async function deriveWebhookSecret(botToken) {
+  if (!botToken) return "";
+  return toHex(await hmac(enc.encode(botToken), enc.encode("telegram-webhook-v1")));
+}
+
+// Сравнение hex-строк за постоянное время — годится и для секрета вебхука.
+export const equalSecret = equalHex;
+
 // Собирает подписанный initData — нужен только тестам.
 export async function signInitData(fields, botToken) {
   const params = new URLSearchParams(fields);

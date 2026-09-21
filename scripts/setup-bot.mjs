@@ -6,19 +6,23 @@
  *   BOT_TOKEN=... WEBHOOK_SECRET=... APP_URL=https://имя.workers.dev npm run bot:setup
  */
 
-const { BOT_TOKEN, WEBHOOK_SECRET, APP_URL } = process.env;
+import { deriveWebhookSecret } from "../src/auth.js";
 
-const missing = Object.entries({ BOT_TOKEN, WEBHOOK_SECRET, APP_URL })
+const { BOT_TOKEN, APP_URL } = process.env;
+
+const missing = Object.entries({ BOT_TOKEN, APP_URL })
   .filter(([, v]) => !v)
   .map(([k]) => k);
 
 if (missing.length) {
   console.error(`Не заданы: ${missing.join(", ")}\n`);
   console.error("Пример:");
-  console.error("  BOT_TOKEN=123:ABC WEBHOOK_SECRET=длинная-строка \\");
-  console.error("  APP_URL=https://aqillych-crm.твой-логин.workers.dev npm run bot:setup");
+  console.error("  BOT_TOKEN=123:ABC APP_URL=https://aqillych-crm.твой-логин.workers.dev npm run bot:setup");
   process.exit(1);
 }
+
+// Тот же секрет вычисляет и Worker — договариваться о нём не нужно.
+const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET || (await deriveWebhookSecret(BOT_TOKEN));
 
 const base = APP_URL.replace(/\/+$/, "");
 

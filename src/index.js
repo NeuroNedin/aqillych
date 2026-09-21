@@ -3,7 +3,7 @@
 // Страница лежит в ./public и отдаётся Cloudflare напрямую.
 // Сюда попадает только то, чего в ./public нет: /api/* и /tg/*.
 
-import { verifyInitData } from "./auth.js";
+import { verifyInitData, deriveWebhookSecret, equalSecret } from "./auth.js";
 import { handleUpdate, sendDigest } from "./bot.js";
 import { parseList } from "./parse.js";
 import { getState, saveLead, deleteLead, markWrote, bulkAdd, getMeta, setMeta } from "./db.js";
@@ -52,13 +52,9 @@ async function readJson(request) {
 async function handleApi(request, env, path) {
   // Пока секреты не добавлены, важнее назвать недостающие поимённо,
   // чем говорить «не настроено».
-  const missing = ["BOT_TOKEN", "OWNER_ID", "WEBHOOK_SECRET"].filter((k) => !env[k]);
+  const missing = ["BOT_TOKEN", "OWNER_ID"].filter((k) => !env[k]);
   if (missing.length) {
-    const list = missing.join(", ");
-    const tail = missing.includes("WEBHOOK_SECRET") && missing.length === 1
-      ? " Без него бот не принимает сообщения из Telegram."
-      : "";
-    return json({ error: `Осталось добавить в настройках приложения: ${list}.${tail}` }, 503);
+    return json({ error: `Осталось добавить в настройках приложения: ${missing.join(", ")}.` }, 503);
   }
 
   const auth = await authorize(request, env);
@@ -131,8 +127,11 @@ async function resolveAppUrl(env, origin) {
 
 async function handleWebhook(request, env, ctx) {
   // Адрес вебхука не секрет, поэтому Telegram присылает общий с нами токен.
+  // Обычно он выводится из токена бота; заданный вручную WEBHOOK_SECRET
+  // имеет приоритет — для тех, кто настроил вебхук по-старому.
+  const expected = env.WEBHOOK_SECRET || (await deriveWebhookSecret(env.BOT_TOKEN));
   const given = request.headers.get("x-telegram-bot-api-secret-token");
-  if (!env.WEBHOOK_SECRET || given !== env.WEBHOOK_SECRET) return new Response("forbidden", { status: 403 });
+  if (!expected || !equalSecret(expected, given ?? "")) return new Response("forbidden", { status: 403 });
 
   await ensureSchema(env);
 
