@@ -1,7 +1,10 @@
 // Проверка HTTP-API против локально запущенного Worker'а.
 // Запускается из test/e2e/run.sh.
 
-import { signInitData } from "../src/auth.js";
+import { readFileSync } from "node:fs";
+import { signInitData, deriveWebhookSecret } from "../src/auth.js";
+
+const CALLS = process.argv[2]; // журнал заглушки Telegram
 
 const BASE = "http://localhost:8787";
 const TOKEN = "123456:AA-local-test-token";
@@ -40,6 +43,32 @@ console.log("\n— доступ —");
 {
   const res = await fetch(`${BASE}/tg/webhook`, { method: "POST", body: "{}" });
   check("вебхук без секрета → 403", res.status === 403, res.status);
+}
+
+console.log("\n— приложение представляется Telegram —");
+{
+  // Первое же обращение мини-аппа должно настроить вебхук, кнопку и команды.
+  await api("/api/state");
+  let calls = [];
+  for (let i = 0; i < 40; i++) {
+    calls = JSON.parse(readFileSync(CALLS, "utf8"));
+    if (calls.some((c) => c.method === "setMyCommands")) break;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  const hook = calls.find((c) => c.method === "setWebhook");
+  check("вебхук поставлен сам", !!hook, calls.map((c) => c.method));
+  check("вебхук ведёт на это приложение", hook?.payload.url === "http://localhost:8787/tg/webhook", hook?.payload.url);
+  check("секрет вебхука выведен из токена",
+    hook?.payload.secret_token === (await deriveWebhookSecret(TOKEN)), hook?.payload.secret_token);
+  check("кнопка меню открывает приложение",
+    calls.find((c) => c.method === "setChatMenuButton")?.payload.menu_button.web_app.url === "http://localhost:8787");
+  check("команды бота заданы", !!calls.find((c) => c.method === "setMyCommands"));
+
+  // Отметка в базе не даёт делать это заново на каждый запрос.
+  const before = calls.length;
+  await api("/api/state");
+  await new Promise((r) => setTimeout(r, 400));
+  check("повторный вход Telegram не беспокоит", JSON.parse(readFileSync(CALLS, "utf8")).length === before);
 }
 
 console.log("\n— состояние —");

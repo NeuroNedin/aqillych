@@ -1,6 +1,7 @@
 // Логика Telegram-бота: приём списков, утренний дайджест, быстрый статус.
 
 import { parseList, contactUrl } from "./parse.js";
+import { deriveWebhookSecret } from "./auth.js";
 import { getState, bulkAdd, getMeta, setMeta } from "./db.js";
 import { CLOSED, PLAN, SOURCE_BY_KEY, countPlan, humanDate, localDate } from "./domain.js";
 
@@ -237,6 +238,41 @@ export async function handleUpdate(env, update) {
   }
 
   await handleList(env, chatId, text, today);
+}
+
+/* ---------- привязка бота к приложению ---------- */
+
+/**
+ * Связать бота с приложением можно только зная адрес приложения, а оно
+ * узнаёт свой адрес само — из запроса, которым его открыли. Поэтому
+ * вебхук, кнопка меню и команды настраиваются при первом входе в мини-апп,
+ * а не руками по ссылкам.
+ */
+export async function wireBot(env, origin) {
+  if (!env.BOT_TOKEN || !origin) return { wired: false, reason: "нет токена или адреса" };
+
+  const secret = env.WEBHOOK_SECRET || (await deriveWebhookSecret(env.BOT_TOKEN));
+
+  const webhook = await callTelegram(env, "setWebhook", {
+    url: `${origin}/tg/webhook`,
+    secret_token: secret,
+    allowed_updates: ["message", "edited_message", "callback_query"],
+  });
+  // Без успешного вебхука бот бесполезен, поэтому дальше идём только при нём.
+  if (!webhook?.ok) return { wired: false, reason: webhook?.description ?? "Telegram отказал" };
+
+  await callTelegram(env, "setChatMenuButton", {
+    menu_button: { type: "web_app", text: "CRM", web_app: { url: origin } },
+  });
+  await callTelegram(env, "setMyCommands", {
+    commands: [
+      { command: "today", description: "Кому написать сегодня" },
+      { command: "plan", description: "План недели" },
+      { command: "help", description: "Как пользоваться" },
+    ],
+  });
+
+  return { wired: true };
 }
 
 /* ---------- утренний дайджест ---------- */

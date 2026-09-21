@@ -4,7 +4,7 @@
 // Сюда попадает только то, чего в ./public нет: /api/* и /tg/*.
 
 import { verifyInitData, deriveWebhookSecret, equalSecret } from "./auth.js";
-import { handleUpdate, sendDigest } from "./bot.js";
+import { handleUpdate, sendDigest, wireBot } from "./bot.js";
 import { parseList } from "./parse.js";
 import { getState, saveLead, deleteLead, markWrote, bulkAdd, getMeta, setMeta } from "./db.js";
 import { localDate, localHour, STATUSES, SOURCES, PLAN, FOLLOW_DAYS } from "./domain.js";
@@ -49,7 +49,18 @@ async function readJson(request) {
   }
 }
 
-async function handleApi(request, env, path) {
+/**
+ * Один раз на адрес: приложение представляется Telegram само.
+ * Отметка в базе не даёт делать это на каждый запрос.
+ */
+async function ensureWired(env, origin) {
+  if (await getMeta(env.DB, "wired") === origin) return;
+  const result = await wireBot(env, origin);
+  if (result.wired) await setMeta(env.DB, "wired", origin);
+  else console.error("не удалось связать бота:", result.reason);
+}
+
+async function handleApi(request, env, path, ctx) {
   // Пока секреты не добавлены, важнее назвать недостающие поимённо,
   // чем говорить «не настроено».
   const missing = ["BOT_TOKEN", "OWNER_ID"].filter((k) => !env[k]);
@@ -61,6 +72,10 @@ async function handleApi(request, env, path) {
   if (auth.error) return auth.error;
 
   await ensureSchema(env);
+
+  // Телеграму можно рассказать о себе в фоне — ответ ждать не должен.
+  const origin = new URL(request.url).origin;
+  ctx.waitUntil(ensureWired(env, origin).catch((err) => console.error("wiring failed", err)));
 
   const day = today(env);
   const nowIso = new Date().toISOString();
@@ -153,7 +168,7 @@ export default {
     const { pathname } = new URL(request.url);
 
     if (pathname === "/tg/webhook") return handleWebhook(request, env, ctx);
-    if (pathname.startsWith("/api/")) return handleApi(request, env, pathname);
+    if (pathname.startsWith("/api/")) return handleApi(request, env, pathname, ctx);
 
     return new Response("Not found", { status: 404 });
   },

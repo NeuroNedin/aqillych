@@ -51,7 +51,7 @@ if ! curl -s -o /dev/null "http://localhost:$PORT/"; then
 fi
 
 echo "=== API ==="
-node e2e/api.mjs
+node e2e/api.mjs "$CALLS"
 
 npx wrangler d1 execute crm --local --command "DELETE FROM leads; DELETE FROM log; DELETE FROM meta;" > /dev/null
 echo '[]' > "$CALLS"
