@@ -275,6 +275,24 @@ export async function wireBot(env, origin) {
   return { wired: true };
 }
 
+/**
+ * Что Telegram думает о нашем боте: под каким именем он известен
+ * и куда сейчас ведёт вебхук. Нужно для страницы состояния.
+ */
+export async function botStatus(env) {
+  if (!env.BOT_TOKEN) return { ok: false, reason: "нет BOT_TOKEN" };
+  const me = await callTelegram(env, "getMe", {});
+  const hook = await callTelegram(env, "getWebhookInfo", {});
+  if (!me?.ok) return { ok: false, reason: me?.description ?? "Telegram не ответил" };
+  return {
+    ok: true,
+    username: me.result.username,
+    webhookUrl: hook?.result?.url ?? "",
+    pending: hook?.result?.pending_update_count ?? 0,
+    lastError: hook?.result?.last_error_message ?? "",
+  };
+}
+
 /* ---------- утренний дайджест ---------- */
 
 export async function sendDigest(env, today) {

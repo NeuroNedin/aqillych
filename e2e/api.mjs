@@ -71,6 +71,18 @@ console.log("\n— приложение представляется Telegram �
   check("повторный вход Telegram не беспокоит", JSON.parse(readFileSync(CALLS, "utf8")).length === before);
 }
 
+console.log("\n— страница состояния —");
+{
+  const res = await fetch(`${BASE}/health`);
+  const html = await res.text();
+  check("открывается без входа", res.status === 200, res.status);
+  check("видит секреты на месте", /BOT_TOKEN задан/.test(html) && /class="m y">✓<\/span><span><span class="t">BOT_TOKEN/.test(html));
+  check("подтверждает привязку", /class="m y">✓<\/span><span><span class="t">Бот знаком с приложением/.test(html));
+  check("показывает имя бота", /@test_crm_bot/.test(html), html.slice(-400));
+  check("говорит, что всё на месте", /<h1>Всё на месте<\/h1>/.test(html), html.match(/<h1>(.*?)<\/h1>/)?.[1]);
+  check("не печатает сам токен", !html.includes(TOKEN.split(":")[1]));
+}
+
 console.log("\n— состояние —");
 const start = await api("/api/state");
 check("state отдаёт 200", start.status === 200, start.data);
