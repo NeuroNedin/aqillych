@@ -184,22 +184,38 @@ async function handleHealth(request, env) {
   const add = (ok, label, note = "") => rows.push({ ok, label, note });
 
   add(!!env.BOT_TOKEN, "BOT_TOKEN задан", env.BOT_TOKEN ? "" : "добавь его в настройках Worker'а как Secret");
-  add(!!env.OWNER_ID, "OWNER_ID задан", env.OWNER_ID ? "" : "добавь его в настройках Worker'а как Secret");
+  const ownerHint = env.OWNER_ID
+    ? `начинается на ${String(env.OWNER_ID).slice(0, 3)}…, длина ${String(env.OWNER_ID).length} — сверь со своим номером`
+    : "добавь его в настройках Worker'а как Secret";
+  add(!!env.OWNER_ID, "OWNER_ID задан", ownerHint);
   if (env.WEBHOOK_SECRET) {
     add(false, "WEBHOOK_SECRET лишний", "удали его: приложение вычисляет секрет из токена само");
   }
 
   let wired = "";
+  let wireProblem = "";
   try {
     await ensureSchema(env);
     wired = (await getMeta(env.DB, "wired")) ?? "";
     add(true, "База отвечает");
+
+    // Страницу открывают именно тогда, когда что-то не работает,
+    // поэтому она не только показывает беду, но и чинит привязку.
+    if (env.BOT_TOKEN && wired !== origin) {
+      const result = await wireBot(env, origin);
+      if (result.wired) {
+        await setMeta(env.DB, "wired", origin);
+        wired = origin;
+      } else {
+        wireProblem = result.reason;
+      }
+    }
   } catch (err) {
     add(false, "База не отвечает", String(err?.message ?? err));
   }
 
   add(wired === origin, "Бот знаком с приложением",
-    wired === origin ? "" : wired ? `привязан к другому адресу: ${wired}` : "зайди в CRM из Telegram — приложение свяжет всё само");
+    wired === origin ? "" : wireProblem || "не удалось связать — обнови страницу");
   add(true, "Постоянный адрес приложения", origin);
 
   let status = null;

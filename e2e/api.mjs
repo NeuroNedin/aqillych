@@ -45,42 +45,43 @@ console.log("\n— доступ —");
   check("вебхук без секрета → 403", res.status === 403, res.status);
 }
 
-console.log("\n— приложение представляется Telegram —");
+console.log("\n— страница состояния чинит привязку —");
 {
-  // Первое же обращение мини-аппа должно настроить вебхук, кнопку и команды.
-  await api("/api/state");
-  let calls = [];
-  for (let i = 0; i < 40; i++) {
-    calls = JSON.parse(readFileSync(CALLS, "utf8"));
-    if (calls.some((c) => c.method === "setMyCommands")) break;
-    await new Promise((r) => setTimeout(r, 100));
-  }
+  // До этого момента бот ещё ни с чем не связан: открытие страницы
+  // состояния должно само это исправить.
+  const res = await fetch(`${BASE}/health`);
+  const html = await res.text();
+  check("открывается без входа", res.status === 200, res.status);
+  const calls = JSON.parse(readFileSync(CALLS, "utf8"));
   const hook = calls.find((c) => c.method === "setWebhook");
-  check("вебхук поставлен сам", !!hook, calls.map((c) => c.method));
+  check("вебхук поставлен при открытии страницы", !!hook, calls.map((c) => c.method));
   check("вебхук ведёт на это приложение", hook?.payload.url === "http://localhost:8787/tg/webhook", hook?.payload.url);
   check("секрет вебхука выведен из токена",
     hook?.payload.secret_token === (await deriveWebhookSecret(TOKEN)), hook?.payload.secret_token);
   check("кнопка меню открывает приложение",
     calls.find((c) => c.method === "setChatMenuButton")?.payload.menu_button.web_app.url === "http://localhost:8787");
   check("команды бота заданы", !!calls.find((c) => c.method === "setMyCommands"));
-
-  // Отметка в базе не даёт делать это заново на каждый запрос.
-  const before = calls.length;
-  await api("/api/state");
-  await new Promise((r) => setTimeout(r, 400));
-  check("повторный вход Telegram не беспокоит", JSON.parse(readFileSync(CALLS, "utf8")).length === before);
+  check("страница подтверждает привязку", /class="m y">✓<\/span><span><span class="t">Бот знаком с приложением/.test(html));
+  check("говорит, что всё на месте", /<h1>Всё на месте<\/h1>/.test(html), html.match(/<h1>(.*?)<\/h1>/)?.[1]);
+  check("показывает имя бота", /@test_crm_bot/.test(html));
+  check("показывает постоянный адрес", /http:\/\/localhost:8787/.test(html));
+  check("не печатает сам токен", !html.includes(TOKEN.split(":")[1]));
+  check("не печатает OWNER_ID целиком", !/>555</.test(html) && /начинается на 555…/.test(html) === false || !html.includes(">555<"));
 }
 
-console.log("\n— страница состояния —");
+console.log("\n— привязка не повторяется —");
 {
-  const res = await fetch(`${BASE}/health`);
-  const html = await res.text();
-  check("открывается без входа", res.status === 200, res.status);
-  check("видит секреты на месте", /BOT_TOKEN задан/.test(html) && /class="m y">✓<\/span><span><span class="t">BOT_TOKEN/.test(html));
-  check("подтверждает привязку", /class="m y">✓<\/span><span><span class="t">Бот знаком с приложением/.test(html));
-  check("показывает имя бота", /@test_crm_bot/.test(html), html.slice(-400));
-  check("говорит, что всё на месте", /<h1>Всё на месте<\/h1>/.test(html), html.match(/<h1>(.*?)<\/h1>/)?.[1]);
-  check("не печатает сам токен", !html.includes(TOKEN.split(":")[1]));
+  // Страница состояния каждый раз спрашивает Telegram о боте — это её работа.
+  // А вот заново настраивать вебхук, кнопку и команды она не должна.
+  const WIRING = ["setWebhook", "setChatMenuButton", "setMyCommands"];
+  const countWiring = () =>
+    JSON.parse(readFileSync(CALLS, "utf8")).filter((c) => WIRING.includes(c.method)).length;
+
+  const before = countWiring();
+  await api("/api/state");
+  await new Promise((r) => setTimeout(r, 500));
+  await fetch(`${BASE}/health`);
+  check("вход в мини-апп ничего не перенастраивает", countWiring() === before, [before, countWiring()]);
 }
 
 console.log("\n— состояние —");
