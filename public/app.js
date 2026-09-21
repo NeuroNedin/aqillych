@@ -250,7 +250,7 @@
   function fail(err) {
     haptic("error");
     if (err && (err.status === 401 || err.status === 403)) {
-      showGate("Доступ закрыт", err.message || "Эта CRM открыта только владельцу.");
+      showGate(err.status === 403 ? "Доступ закрыт" : "Telegram не подтвердил вход", err.message || "");
       return;
     }
     toast((err && err.message) || "Не сохранилось, попробуй ещё раз");
@@ -402,9 +402,9 @@
       showApp();
     }).catch(function (err) {
       if (err.status === 401) {
-        showGate("Telegram не подтвердил вход", "Открой CRM заново через кнопку в боте — данные входа устарели.", true);
+        showGate("Telegram не подтвердил вход", err.message, true);
       } else if (err.status === 403) {
-        showGate("Доступ закрыт", "Эта CRM открыта только владельцу.");
+        showGate("Доступ закрыт", err.message);
       } else if (err.status === 503) {
         showGate("Почти готово", err.message, true);
       } else {

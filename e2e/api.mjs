@@ -35,10 +35,24 @@ console.log("\n— доступ —");
 {
   const r = await api("/api/state", null, 999);
   check("чужой telegram id → 403", r.status === 403, r.status);
+  check("видно, чей номер ждали и чей пришёл",
+    /555/.test(r.data.error || "") && /999/.test(r.data.error || ""), r.data.error);
 }
 {
   const res = await fetch(`${BASE}/api/state`, { headers: { "x-init-data": "user=%7B%22id%22%3A555%7D&hash=deadbeef&auth_date=1" } });
+  const data = await res.json();
   check("поддельная подпись → 401", res.status === 401, res.status);
+  check("причина названа человеческим языком", /BOT_TOKEN/.test(data.error || ""), data.error);
+  check("машинная причина тоже отдана", data.reason === "bad_signature", data.reason);
+}
+{
+  const old = await signInitData({
+    user: JSON.stringify({ id: 555, first_name: "Али" }),
+    auth_date: String(Math.floor(Date.now() / 1000) - 90000),
+  }, TOKEN);
+  const res = await fetch(`${BASE}/api/state`, { headers: { "x-init-data": old } });
+  const data = await res.json();
+  check("протухший вход объясняется отдельно", /старше суток/.test(data.error || ""), data.error);
 }
 {
   const res = await fetch(`${BASE}/tg/webhook`, { method: "POST", body: "{}" });

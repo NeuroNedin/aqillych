@@ -30,12 +30,34 @@ const today = (env) => localDate(Number(env.TZ_OFFSET ?? 0));
 
 // Мини-апп имеет право на запись только если Telegram подписал его данные
 // и за ними стоит владелец из OWNER_ID.
+// Причин отказа несколько, и лечатся они по-разному — общий текст
+// «не подтвердил вход» заставляет владельца гадать.
+const WHY_REFUSED = {
+  no_init_data: "Telegram не передал данные входа. Открывай CRM кнопкой в боте, а не по ссылке в браузере.",
+  no_hash: "Данные входа пришли без подписи — открой CRM заново кнопкой в боте.",
+  bad_signature: "Подпись не сходится. Чаще всего BOT_TOKEN в настройках приложения — от другого бота или скопирован с лишними символами.",
+  expired: "Данные входа старше суток. Закрой CRM и открой заново.",
+  future_auth_date: "Часы устройства сильно расходятся с реальным временем — проверь дату и время в настройках телефона.",
+  no_auth_date: "Данные входа пришли без отметки времени — открой CRM заново кнопкой в боте.",
+  bad_user: "Telegram прислал данные, которые не удалось разобрать. Открой CRM заново.",
+  no_user: "Telegram не сообщил, кто открыл приложение. Открой CRM кнопкой в боте.",
+  no_bot_token: "В настройках приложения не задан BOT_TOKEN.",
+};
+
 async function authorize(request, env) {
   const initData = request.headers.get("x-init-data") ?? "";
   const result = await verifyInitData(initData, env.BOT_TOKEN);
-  if (!result.ok) return { error: json({ error: "Telegram не подтвердил вход", reason: result.reason }, 401) };
+  if (!result.ok) {
+    const why = WHY_REFUSED[result.reason] ?? "Telegram не подтвердил вход.";
+    return { error: json({ error: why, reason: result.reason }, 401) };
+  }
   if (String(result.user.id) !== String(env.OWNER_ID)) {
-    return { error: json({ error: "Доступ закрыт" }, 403) };
+    // Владельцу полезно увидеть собственный номер: обычно это опечатка в OWNER_ID.
+    return {
+      error: json({
+        error: `Доступ закрыт. Приложение ждёт владельца с номером ${env.OWNER_ID}, а вошёл ${result.user.id}.`,
+      }, 403),
+    };
   }
   return { user: result.user };
 }
