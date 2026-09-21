@@ -23,8 +23,8 @@ DIGEST_HOUR = "9"
 # Заполни, только если раздаёшь CRM со своего домена.
 APP_URL = ""
 
-# Заполняется после `wrangler d1 create crm` — команда напечатает database_id.
+# База D1, созданная в панели Cloudflare.
 [[d1_databases]]
 binding = "DB"
 database_name = "crm"
-database_id = "00000000-0000-0000-0000-000000000000"
+database_id = "faa31bb7-8ea9-44d0-ac56-a37a431ef3c1"
