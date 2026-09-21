@@ -50,8 +50,15 @@ async function readJson(request) {
 }
 
 async function handleApi(request, env, path) {
-  if (!env.BOT_TOKEN || !env.OWNER_ID) {
-    return json({ error: "Worker не настроен: не заданы BOT_TOKEN или OWNER_ID" }, 500);
+  // Пока секреты не добавлены, важнее назвать недостающие поимённо,
+  // чем говорить «не настроено».
+  const missing = ["BOT_TOKEN", "OWNER_ID", "WEBHOOK_SECRET"].filter((k) => !env[k]);
+  if (missing.length) {
+    const list = missing.join(", ");
+    const tail = missing.includes("WEBHOOK_SECRET") && missing.length === 1
+      ? " Без него бот не принимает сообщения из Telegram."
+      : "";
+    return json({ error: `Осталось добавить в настройках приложения: ${list}.${tail}` }, 503);
   }
 
   const auth = await authorize(request, env);

@@ -405,6 +405,8 @@
         showGate("Telegram не подтвердил вход", "Открой CRM заново через кнопку в боте — данные входа устарели.", true);
       } else if (err.status === 403) {
         showGate("Доступ закрыт", "Эта CRM открыта только владельцу.");
+      } else if (err.status === 503) {
+        showGate("Почти готово", err.message, true);
       } else {
         showGate("Не смог загрузить базу", (err && err.message) || "Проверь связь и попробуй снова.", true);
       }
