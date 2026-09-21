@@ -8,6 +8,17 @@ import { handleUpdate, sendDigest } from "./bot.js";
 import { parseList } from "./parse.js";
 import { getState, saveLead, deleteLead, markWrote, bulkAdd, getMeta, setMeta } from "./db.js";
 import { localDate, localHour, STATUSES, SOURCES, PLAN, FOLLOW_DAYS } from "./domain.js";
+import { SCHEMA } from "./schema.js";
+
+// Таблицы создаются сами при первом обращении: так CRM разворачивается
+// без командной строки. Флаг живёт, пока жив изолят, — обычно это
+// одна проверка на холодный старт.
+let schemaReady = false;
+async function ensureSchema(env) {
+  if (schemaReady) return;
+  await env.DB.batch(SCHEMA.map((sql) => env.DB.prepare(sql)));
+  schemaReady = true;
+}
 
 const json = (data, status = 200) =>
   new Response(JSON.stringify(data), {
@@ -45,6 +56,8 @@ async function handleApi(request, env, path) {
 
   const auth = await authorize(request, env);
   if (auth.error) return auth.error;
+
+  await ensureSchema(env);
 
   const day = today(env);
   const nowIso = new Date().toISOString();
@@ -114,6 +127,8 @@ async function handleWebhook(request, env, ctx) {
   const given = request.headers.get("x-telegram-bot-api-secret-token");
   if (!env.WEBHOOK_SECRET || given !== env.WEBHOOK_SECRET) return new Response("forbidden", { status: 403 });
 
+  await ensureSchema(env);
+
   const update = await readJson(request);
   const origin = new URL(request.url).origin;
 
@@ -144,6 +159,7 @@ export default {
 };
 
 export async function maybeSendDigest(env, now = new Date()) {
+  await ensureSchema(env);
   const offset = Number(env.TZ_OFFSET ?? 0);
   const hour = Number(env.DIGEST_HOUR ?? 9);
   if (localHour(offset, now) !== hour) return { sent: false, reason: "не тот час" };

@@ -39,86 +39,52 @@
 
 ## Установка
 
-Понадобится [Node.js](https://nodejs.org) 20 или новее и аккаунт
-[Cloudflare](https://dash.cloudflare.com/sign-up) — оба бесплатны.
+Нужны два бесплатных аккаунта: [Telegram-бот](https://t.me/BotFather) и
+[Cloudflare](https://dash.cloudflare.com/sign-up). Таблицы в базе Worker
+создаёт сам при первом запросе — вручную ничего выполнять не нужно.
 
-### 1. Заведи бота
+### Без командной строки, из браузера
 
-Напиши [@BotFather](https://t.me/BotFather) команду `/newbot`, придумай имя.
-В ответ придёт **токен** вида `123456789:AAF...` — он понадобится дальше.
+Годится и с телефона.
 
-### 2. Узнай свой Telegram ID
+1. **Бот.** [@BotFather](https://t.me/BotFather) → `/newbot` → придумай имя.
+   В ответ придёт токен вида `123456789:AAF...`.
+2. **Свой Telegram ID.** [@userinfobot](https://t.me/userinfobot) ответит числом.
+3. **База.** В панели Cloudflare: раздел с хранилищами → **D1** → создать базу
+   с именем `crm`. Скопируй её `Database ID` и впиши в `wrangler.toml`
+   вместо нулей (файл можно отредактировать прямо на GitHub).
+4. **Worker.** В панели Cloudflare: **Workers** → импортировать репозиторий →
+   выбрать этот репозиторий и ветку. Cloudflare соберёт и выложит сам,
+   а `wrangler.toml` из репозитория подхватится вместе с привязкой к базе.
+5. **Секреты.** В настройках Worker'а → переменные → добавь три штуки
+   **как Secret**: `BOT_TOKEN`, `OWNER_ID`, `WEBHOOK_SECRET`
+   (последний — любая длинная случайная строка, её же используешь в шаге 6).
+6. **Вебхук.** Открой в браузере, подставив своё:
+   `https://api.telegram.org/bot<ТОКЕН>/setWebhook?url=<АДРЕС_WORKER>/tg/webhook&secret_token=<СЕКРЕТ>`
+   В ответ должно прийти `{"ok":true,...}`.
+7. Напиши боту `/start`.
 
-Напиши [@userinfobot](https://t.me/userinfobot) — он ответит числом вроде `284729103`.
-Это твой ID: по нему CRM пустит только тебя.
+### Через командную строку
 
-### 3. Поставь зависимости
+Понадобится [Node.js](https://nodejs.org) 20 или новее.
 
 ```bash
 git clone https://github.com/NeuroNedin/aqillych.git
 cd aqillych
 npm install
 npx wrangler login
+npx wrangler d1 create crm      # id из ответа впиши в wrangler.toml
+npx wrangler secret put BOT_TOKEN
+npx wrangler secret put OWNER_ID
+npx wrangler secret put WEBHOOK_SECRET
+npm run deploy                  # напечатает адрес Worker'а
 ```
 
-Последняя команда откроет браузер — разреши доступ к своему Cloudflare.
-
-### 4. Создай базу
+Затем одной командой ставятся вебхук, команды бота и кнопка меню:
 
 ```bash
-npx wrangler d1 create crm
+BOT_TOKEN=токен WEBHOOK_SECRET=секрет APP_URL=адрес npm run bot:setup
 ```
-
-Команда напечатает строку `database_id = "..."`. Скопируй этот id
-в `wrangler.toml`, в самый низ — вместо нулей.
-
-Затем создай таблицы:
-
-```bash
-npm run db:init
-```
-
-### 5. Положи секреты
-
-```bash
-npx wrangler secret put BOT_TOKEN        # токен от BotFather
-npx wrangler secret put OWNER_ID         # твой Telegram ID
-npx wrangler secret put WEBHOOK_SECRET   # длинная случайная строка
-```
-
-Для третьего можно сгенерировать строку:
-
-```bash
-openssl rand -hex 32
-```
-
-Сохрани её — она понадобится на шаге 7.
-
-### 6. Выложи
-
-```bash
-npm run deploy
-```
-
-В конце команда напечатает адрес вида
-`https://aqillych-crm.твой-логин.workers.dev` — скопируй его.
-
-### 7. Подключи бота
-
-```bash
-BOT_TOKEN=токен \
-WEBHOOK_SECRET=строка-из-шага-5 \
-APP_URL=адрес-из-шага-6 \
-npm run bot:setup
-```
-
-Эта команда говорит Telegram, куда слать сообщения, ставит команды в меню
-и вешает кнопку «CRM» рядом с полем ввода.
-
-### 8. Проверь
-
-Напиши боту `/start`. Должно прийти приветствие с кнопкой «Открыть CRM».
-Пришли ему пару строк со списком — они появятся в приложении.
 
 ## Настройки
 
@@ -144,10 +110,10 @@ src/
   db.js       запросы к базе и проверка всего, что в неё кладут
   parse.js    разбор списков и приведение контактов к единому виду
   domain.js   статусы, источники, цели недели, работа с датами
+  schema.js   структура базы; Worker создаёт её сам при первом запросе
 public/
   index.html  страница мини-аппа
   app.js      её логика
-schema.sql    таблицы
 ```
 
 Мини-апп сам ничего не решает: сервер отдаёт ему готовые данные вместе
@@ -177,7 +143,7 @@ npm run test:e2e  # сквозная проверка API и бота на ло�
 ```
 
 Для `npm run dev` и сквозных проверок скопируй `.dev.vars.example`
-в `.dev.vars` и заполни. Локальную базу создаёт `npm run db:init:local`.
+в `.dev.vars` и заполни. Локальная база создаётся сама.
 
 Проверки в браузере (`npm run test:e2e:ui`) дополнительно требуют
 `npm i -D playwright && npx playwright install chromium`.

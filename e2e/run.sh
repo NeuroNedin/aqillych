@@ -35,7 +35,8 @@ if ! curl -s -o /dev/null -X POST "http://localhost:$MOCK_PORT/bot/ping" -d '{}'
 fi
 echo '[]' > "$CALLS"
 
-npx wrangler d1 execute crm --local --file=./schema.sql > /dev/null
+node scripts/print-schema.mjs > "$WORK/schema.sql"
+npx wrangler d1 execute crm --local --file="$WORK/schema.sql" > /dev/null
 npx wrangler d1 execute crm --local --command "DELETE FROM leads; DELETE FROM log; DELETE FROM meta;" > /dev/null
 
 npx wrangler dev --port "$PORT" --local > "$WORK/wrangler.log" 2>&1 & WORKER_PID=$!

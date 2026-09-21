@@ -10,10 +10,15 @@ function fakeDb(leads = [], log = []) {
     if (sql.includes("FROM log")) return { results: log.filter((e) => e.date >= args[0]) };
     if (sql.includes("FROM meta")) return { row: meta.has(args[0]) ? { value: meta.get(args[0]) } : null };
     if (sql.includes("INTO meta")) { meta.set(args[0], args[1]); return { row: null }; }
+    if (sql.startsWith("CREATE")) return { row: null };
     throw new Error(`Запрос не предусмотрен моком: ${sql}`);
   };
   return {
     meta,
+    // Worker создаёт таблицы сам — мок просто соглашается.
+    async batch(statements) {
+      return statements.map(() => ({ meta: { changes: 0 } }));
+    },
     prepare(sql) {
       let args = [];
       const api = {
