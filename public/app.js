@@ -68,6 +68,8 @@
         if (!res.ok) {
           var err = new Error(data.error || "Сервер ответил " + res.status);
           err.status = res.status;
+          err.reason = data.reason;
+          err.fields = data.fields;
           throw err;
         }
         return data;
@@ -381,13 +383,15 @@
   }
 
   /* ---------- экран ожидания и ошибок ---------- */
-  function showGate(title, text, retry) {
+  function showGate(title, text, retry, detail) {
     $("gate").hidden = false;
     $("app").hidden = true;
     $("add").hidden = true;
     $("gateTitle").textContent = title;
     $("gateText").textContent = text || "";
     $("gateRetry").hidden = !retry;
+    $("gateDetail").textContent = detail || "";
+    $("gateDetail").hidden = !detail;
   }
 
   function showApp() {
@@ -402,7 +406,10 @@
       showApp();
     }).catch(function (err) {
       if (err.status === 401) {
-        showGate("Telegram не подтвердил вход", err.message, true);
+        // Техническая строка нужна, чтобы разобраться, не переспрашивая.
+        var detail = err.reason ? "код: " + err.reason : "";
+        if (err.fields) detail += " · поля: " + err.fields.join(", ");
+        showGate("Telegram не подтвердил вход", err.message, true, detail);
       } else if (err.status === 403) {
         showGate("Доступ закрыт", err.message);
       } else if (err.status === 503) {

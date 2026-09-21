@@ -24,7 +24,8 @@ test("настоящая подпись проходит и отдаёт пол�
 
 test("подпись, снятая с другого бота, не проходит", async () => {
   const res = await verifyInitData(await makeInitData(), "999999:OTHER-token");
-  assert.deepEqual(res, { ok: false, reason: "bad_signature" });
+  assert.equal(res.ok, false);
+  assert.equal(res.reason, "bad_signature");
 });
 
 test("подменённое поле ломает подпись", async () => {
@@ -32,7 +33,8 @@ test("подменённое поле ломает подпись", async () => 
   const params = new URLSearchParams(initData);
   params.set("user", JSON.stringify({ ...USER, id: 777 }));
   const res = await verifyInitData(params.toString(), TOKEN);
-  assert.deepEqual(res, { ok: false, reason: "bad_signature" });
+  assert.equal(res.ok, false);
+  assert.equal(res.reason, "bad_signature");
 });
 
 test("протухшие данные отклоняются", async () => {
@@ -84,4 +86,75 @@ test("секрет вебхука не совпадает с подписью in
   const secret = await deriveWebhookSecret(TOKEN);
   const initData = await makeInitData();
   assert.notEqual(secret, new URLSearchParams(initData).get("hash"));
+});
+
+test("данные с signature проходят, когда подпись считалась без него", async () => {
+  const initData = await signInitData({
+    query_id: "AAE",
+    user: JSON.stringify(USER),
+    auth_date: String(Math.floor(Date.now() / 1000)),
+    signature: "aBcD-eFgH_1234",
+  }, TOKEN);
+  assert.match(initData, /signature=/);
+  assert.equal((await verifyInitData(initData, TOKEN)).ok, true);
+});
+
+test("данные с signature проходят и когда клиент включил его в подпись", async () => {
+  const fields = {
+    query_id: "AAE",
+    user: JSON.stringify(USER),
+    auth_date: String(Math.floor(Date.now() / 1000)),
+    signature: "aBcD-eFgH_1234",
+  };
+  const initData = await signInitData(fields, TOKEN, { signedFields: Object.keys(fields) });
+  assert.equal((await verifyInitData(initData, TOKEN)).ok, true);
+});
+
+test("плюс в значении не ломает подпись", async () => {
+  const initData = await signInitData({
+    user: JSON.stringify({ ...USER, first_name: "Али+Недин" }),
+    auth_date: String(Math.floor(Date.now() / 1000)),
+  }, TOKEN);
+  const res = await verifyInitData(initData, TOKEN);
+  assert.equal(res.ok, true);
+  assert.equal(res.user.first_name, "Али+Недин");
+});
+
+test("послабление к signature не открывает дверь чужому токену", async () => {
+  const initData = await signInitData({
+    user: JSON.stringify(USER),
+    auth_date: String(Math.floor(Date.now() / 1000)),
+    signature: "aBcD-eFgH_1234",
+  }, TOKEN);
+  const res = await verifyInitData(initData, "999999:OTHER");
+  assert.equal(res.ok, false);
+  assert.equal(res.reason, "bad_signature");
+});
+
+test("подменённое поле не спасает ни один из вариантов подписи", async () => {
+  const initData = await signInitData({
+    user: JSON.stringify(USER),
+    auth_date: String(Math.floor(Date.now() / 1000)),
+    signature: "aBcD-eFgH_1234",
+  }, TOKEN);
+  const tampered = initData.replace(/user=[^&]*/, `user=${encodeURIComponent(JSON.stringify({ ...USER, id: 777 }))}`);
+  const res = await verifyInitData(tampered, TOKEN);
+  assert.equal(res.ok, false);
+  assert.equal(res.reason, "bad_signature");
+});
+
+test("значения в кириллице переживают разбор", async () => {
+  const initData = await signInitData({
+    user: JSON.stringify({ id: 555, first_name: "Али", last_name: "Недин" }),
+    auth_date: String(Math.floor(Date.now() / 1000)),
+  }, TOKEN);
+  const res = await verifyInitData(initData, TOKEN);
+  assert.equal(res.ok, true);
+  assert.equal(res.user.last_name, "Недин");
+});
+
+test("при неверной подписи возвращаются имена полей — но не значения", async () => {
+  const res = await verifyInitData(await makeInitData(), "999999:OTHER-token");
+  assert.deepEqual(res.fields, ["auth_date", "hash", "query_id", "user"]);
+  assert.equal(JSON.stringify(res).includes("Али"), false);
 });

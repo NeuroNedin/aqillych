@@ -28,26 +28,70 @@ function equalHex(a, b) {
 /**
  * @returns {Promise<{ok: true, user: object} | {ok: false, reason: string}>}
  */
-export async function verifyInitData(initData, botToken, { maxAgeSeconds = 86400, now = Date.now() } = {}) {
-  if (!initData || typeof initData !== "string") return { ok: false, reason: "no_init_data" };
-  if (!botToken) return { ok: false, reason: "no_bot_token" };
+const decode = (s) => {
+  try {
+    return decodeURIComponent(s);
+  } catch {
+    return s;
+  }
+};
 
-  const params = new URLSearchParams(initData);
-  const hash = params.get("hash");
-  if (!hash) return { ok: false, reason: "no_hash" };
+/**
+ * Разбираем initData сами, а не через URLSearchParams: тот превращает «+»
+ * в пробел, и подпись перестаёт сходиться на значениях, где «+» встречается
+ * буквально.
+ */
+function parseInitData(initData) {
+  const pairs = [];
+  for (const chunk of initData.split("&")) {
+    if (!chunk) continue;
+    const eq = chunk.indexOf("=");
+    const key = eq === -1 ? chunk : chunk.slice(0, eq);
+    const value = eq === -1 ? "" : chunk.slice(eq + 1);
+    pairs.push([decode(key), decode(value)]);
+  }
+  return pairs;
+}
 
-  const dataCheckString = [...params.entries()]
-    .filter(([k]) => k !== "hash" && k !== "signature")
+const checkString = (pairs, skip) =>
+  pairs
+    .filter(([k]) => !skip.has(k))
     .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
     .map(([k, v]) => `${k}=${v}`)
     .join("\n");
 
+export async function verifyInitData(initData, botToken, { maxAgeSeconds = 86400, now = Date.now() } = {}) {
+  if (!initData || typeof initData !== "string") return { ok: false, reason: "no_init_data" };
+  if (!botToken) return { ok: false, reason: "no_bot_token" };
+
+  const pairs = parseInitData(initData);
+  const get = (name) => pairs.find(([k]) => k === name)?.[1];
+
+  const hash = get("hash");
+  if (!hash) return { ok: false, reason: "no_hash" };
+
   const secret = await hmac(enc.encode("WebAppData"), enc.encode(botToken));
-  const expected = toHex(await hmac(secret, enc.encode(dataCheckString)));
-  if (!equalHex(expected, hash.toLowerCase())) return { ok: false, reason: "bad_signature" };
+
+  // Поле signature появилось позже hash и в подпись не входит. Клиенты
+  // разных версий расходятся в этом, поэтому принимаем оба состава:
+  // знание токена требуется в любом случае.
+  const skips = [new Set(["hash", "signature"])];
+  if (pairs.some(([k]) => k === "signature")) skips.push(new Set(["hash"]));
+
+  let matched = false;
+  for (const skip of skips) {
+    const expected = toHex(await hmac(secret, enc.encode(checkString(pairs, skip))));
+    if (equalHex(expected, hash.toLowerCase())) {
+      matched = true;
+      break;
+    }
+  }
+  // Имена полей не секретны, а разобраться по ним можно быстро:
+  // видно, какой клиент Telegram и какой набор полей прислал.
+  if (!matched) return { ok: false, reason: "bad_signature", fields: pairs.map(([k]) => k).sort() };
 
   // Подпись верна, но данные могли утечь и быть переиспользованы позже.
-  const authDate = Number(params.get("auth_date"));
+  const authDate = Number(get("auth_date"));
   if (!Number.isFinite(authDate)) return { ok: false, reason: "no_auth_date" };
   const ageSeconds = Math.floor(now / 1000) - authDate;
   if (ageSeconds > maxAgeSeconds) return { ok: false, reason: "expired" };
@@ -56,7 +100,7 @@ export async function verifyInitData(initData, botToken, { maxAgeSeconds = 86400
 
   let user;
   try {
-    user = JSON.parse(params.get("user") || "null");
+    user = JSON.parse(get("user") || "null");
   } catch {
     return { ok: false, reason: "bad_user" };
   }
@@ -80,13 +124,19 @@ export async function deriveWebhookSecret(botToken) {
 export const equalSecret = equalHex;
 
 // Собирает подписанный initData — нужен только тестам.
-export async function signInitData(fields, botToken) {
-  const params = new URLSearchParams(fields);
-  const dataCheckString = [...params.entries()]
-    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-    .map(([k, v]) => `${k}=${v}`)
-    .join("\n");
+export async function signInitData(fields, botToken, { signedFields } = {}) {
+  const pairs = Object.entries(fields);
+  // signedFields — какие поля вошли в подпись; по умолчанию все,
+  // кроме signature, как это делает Telegram.
+  const skip = new Set(["hash"]);
+  if (!signedFields) skip.add("signature");
+  else for (const [k] of pairs) if (!signedFields.includes(k)) skip.add(k);
+
   const secret = await hmac(enc.encode("WebAppData"), enc.encode(botToken));
-  params.set("hash", toHex(await hmac(secret, enc.encode(dataCheckString))));
-  return params.toString();
+  const hash = toHex(await hmac(secret, enc.encode(checkString(pairs, skip))));
+
+  return pairs
+    .concat([["hash", hash]])
+    .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
+    .join("&");
 }

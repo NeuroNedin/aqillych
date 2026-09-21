@@ -113,6 +113,7 @@ dialog::backdrop{background:rgba(10,20,15,.45)}
 .gate{max-width:420px;margin:0 auto;padding:60px 20px;text-align:center;display:flex;flex-direction:column;gap:12px}
 .gate h1{font-size:19px}
 .gate p{color:var(--muted);font-size:14px;margin:0;line-height:1.5}
+.gate-detail{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--faint,var(--muted));opacity:.75;overflow-wrap:anywhere;padding-top:4px}
 @media (prefers-reduced-motion:reduce){.bar i{transition:none}}
 </style>
 </head>
@@ -122,6 +123,7 @@ dialog::backdrop{background:rgba(10,20,15,.45)}
   <h1 id="gateTitle">Загружаю базу…</h1>
   <p id="gateText"></p>
   <div><button class="btn" type="button" id="gateRetry" hidden>Попробовать снова</button></div>
+  <p class="gate-detail" id="gateDetail" hidden></p>
 </div>
 
 <div class="wrap" id="app" hidden>

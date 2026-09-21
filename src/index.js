@@ -49,7 +49,9 @@ async function authorize(request, env) {
   const result = await verifyInitData(initData, env.BOT_TOKEN);
   if (!result.ok) {
     const why = WHY_REFUSED[result.reason] ?? "Telegram не подтвердил вход.";
-    return { error: json({ error: why, reason: result.reason }, 401) };
+    return {
+      error: json({ error: why, reason: result.reason, fields: result.fields ?? null }, 401),
+    };
   }
   if (String(result.user.id) !== String(env.OWNER_ID)) {
     // Владельцу полезно увидеть собственный номер: обычно это опечатка в OWNER_ID.
