@@ -1,0 +1,223 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>CRM</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2032%2032%22%3E%3Crect%20width%3D%2232%22%20height%3D%2232%22%20rx%3D%228%22%20fill%3D%22%231E6A50%22%2F%3E%3Ccircle%20cx%3D%2210.5%22%20cy%3D%2211%22%20r%3D%222.6%22%20fill%3D%22%23fff%22%2F%3E%3Crect%20x%3D%2216%22%20y%3D%229.4%22%20width%3D%229%22%20height%3D%223.2%22%20rx%3D%221.6%22%20fill%3D%22%23fff%22%2F%3E%3Ccircle%20cx%3D%2210.5%22%20cy%3D%2221%22%20r%3D%222.6%22%20fill%3D%22%23fff%22%2F%3E%3Crect%20x%3D%2216%22%20y%3D%2219.4%22%20width%3D%229%22%20height%3D%223.2%22%20rx%3D%221.6%22%20fill%3D%22%23fff%22%2F%3E%3C%2Fsvg%3E">
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;600;700&family=Unbounded:wght@500;700&display=swap">
+<style>
+:root{
+  --ground:#F2F4F1; --surface:#FFFFFF; --sunk:#E8ECE7; --line:#D6DDD7;
+  --ink:#15201B; --muted:#5C6A63; --accent:#1E6A50; --accent-ink:#FFFFFF; --accent-soft:#DCEDE4;
+  --warn:#9A6414; --warn-soft:#F6EAD3; --danger:#A83B37; --danger-soft:#F5DEDC;
+  --blue:#2F5E8C; --blue-soft:#DCE7F2; --violet:#5B4B94; --violet-soft:#E5E0F3;
+  --shadow:0 10px 30px rgba(20,40,30,.14);
+  color-scheme:light;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --ground:#0E1311; --surface:#171E1B; --sunk:#1F2824; --line:#2B3631;
+    --ink:#E5ECE8; --muted:#95A59D; --accent:#4DB38B; --accent-ink:#08130E; --accent-soft:#1C3A2E;
+    --warn:#E0A94E; --warn-soft:#3A2D16; --danger:#E27C77; --danger-soft:#3D1F1E;
+    --blue:#86B1DB; --blue-soft:#1C2B3B; --violet:#AFA2E3; --violet-soft:#2A2440;
+    --shadow:0 10px 30px rgba(0,0,0,.5);
+    color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --ground:#0E1311; --surface:#171E1B; --sunk:#1F2824; --line:#2B3631;
+  --ink:#E5ECE8; --muted:#95A59D; --accent:#4DB38B; --accent-ink:#08130E; --accent-soft:#1C3A2E;
+  --warn:#E0A94E; --warn-soft:#3A2D16; --danger:#E27C77; --danger-soft:#3D1F1E;
+  --blue:#86B1DB; --blue-soft:#1C2B3B; --violet:#AFA2E3; --violet-soft:#2A2440;
+  --shadow:0 10px 30px rgba(0,0,0,.5);
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+body{margin:0;background:var(--ground);color:var(--ink);font:15px/1.45 Onest,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;-webkit-tap-highlight-color:transparent}
+img{max-width:100%}
+.wrap{max-width:720px;margin:0 auto;padding-inline:16px;padding-block:calc(18px + env(safe-area-inset-top,0px)) 110px;display:flex;flex-direction:column;gap:22px}
+h1,h2{font-family:Unbounded,Onest,system-ui,sans-serif;margin:0;text-wrap:balance}
+h1{font-size:22px;font-weight:700;letter-spacing:-.01em}
+h2{font-size:14px;font-weight:500;letter-spacing:.02em}
+.top{display:flex;justify-content:space-between;align-items:baseline;gap:12px;flex-wrap:wrap}
+.sub{color:var(--muted);font-size:13px}
+.num{font-variant-numeric:tabular-nums}
+.banner{background:var(--danger-soft);color:var(--danger);border-radius:10px;padding:10px 12px;font-size:13px}
+.plan{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:14px;display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:14px 18px}
+.meter .lbl{display:flex;justify-content:space-between;font-size:13px;color:var(--muted);margin-bottom:6px}
+.meter .lbl b{color:var(--ink);font-weight:600}
+.bar{height:6px;border-radius:3px;background:var(--sunk);overflow:hidden}
+.bar i{display:block;height:100%;background:var(--accent);border-radius:3px;transition:width .3s}
+.meter.done .lbl b::after{content:" ✓";color:var(--accent)}
+.plan .hint{grid-column:1/-1;font-size:12px;color:var(--muted);border-top:1px dashed var(--line);padding-top:10px}
+.sec{display:flex;flex-direction:column;gap:10px}
+.sec-h{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
+.count{font-size:12px;color:var(--muted)}
+.chips{display:flex;gap:6px;overflow-x:auto;padding-bottom:2px;scrollbar-width:none}
+.chips::-webkit-scrollbar{display:none}
+.chip{flex:none;border:1px solid var(--line);background:var(--surface);color:var(--ink);border-radius:999px;padding:6px 12px;font:inherit;font-size:13px;cursor:pointer;white-space:nowrap}
+.chip[aria-pressed="true"]{background:var(--ink);color:var(--ground);border-color:var(--ink)}
+.chip .n{opacity:.6;margin-left:4px}
+input.search{width:100%;border:1px solid var(--line);background:var(--surface);color:var(--ink);border-radius:10px;padding:10px 12px;font:inherit}
+.list{display:flex;flex-direction:column;gap:8px}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:12px 14px;display:grid;grid-template-columns:1fr auto;gap:6px 10px}
+.card.due{border-color:var(--warn)}
+.card .name{font-weight:600;font-size:15px;overflow-wrap:anywhere}
+.card .meta{grid-column:1/-1;color:var(--muted);font-size:13px;overflow-wrap:anywhere}
+.card .row{grid-column:1/-1;display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:4px}
+.card .when{font-size:12px;color:var(--muted);margin-right:auto}
+.card .when.late{color:var(--danger);font-weight:600}
+.card .when.today{color:var(--warn);font-weight:600}
+.pill{font-size:12px;border-radius:999px;padding:3px 9px;white-space:nowrap;align-self:start;background:var(--sunk);color:var(--muted)}
+.s-sent{background:var(--blue-soft);color:var(--blue)}
+.s-chat{background:var(--accent-soft);color:var(--accent)}
+.s-call{background:var(--violet-soft);color:var(--violet)}
+.s-think{background:var(--warn-soft);color:var(--warn)}
+.s-work{background:var(--accent);color:var(--accent-ink)}
+.s-no{background:var(--danger-soft);color:var(--danger)}
+.src{font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted)}
+.btn{border:1px solid var(--line);background:var(--surface);color:var(--ink);border-radius:9px;padding:7px 12px;font:inherit;font-size:13px;font-weight:500;cursor:pointer}
+.btn.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+.btn.danger{color:var(--danger);border-color:var(--danger-soft)}
+.btn[disabled]{opacity:.5;cursor:default}
+.btn:focus-visible,.chip:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.empty{color:var(--muted);font-size:14px;background:var(--surface);border:1px dashed var(--line);border-radius:12px;padding:16px}
+.fab{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(18px + env(safe-area-inset-bottom,0px));background:var(--accent);color:var(--accent-ink);border:0;border-radius:999px;padding:14px 24px;font:600 15px Onest,system-ui,sans-serif;box-shadow:var(--shadow);cursor:pointer;z-index:5}
+dialog{border:0;padding:0;background:transparent;max-width:100vw;width:100%;margin:auto auto 0;max-height:92vh}
+dialog::backdrop{background:rgba(10,20,15,.45)}
+.sheet{background:var(--surface);color:var(--ink);border-radius:18px 18px 0 0;padding:18px 16px calc(18px + env(safe-area-inset-bottom,0px));max-width:720px;margin:0 auto;display:flex;flex-direction:column;gap:12px;max-height:92vh;overflow-y:auto}
+.sheet h2{font-size:16px}
+.f{display:flex;flex-direction:column;gap:4px}
+.f label{font-size:12px;color:var(--muted);letter-spacing:.02em}
+.f input,.f select,.f textarea{border:1px solid var(--line);background:var(--ground);color:var(--ink);border-radius:9px;padding:9px 10px;font:inherit;width:100%}
+.f textarea{min-height:64px;resize:vertical}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.actions{display:flex;gap:8px;justify-content:space-between;flex-wrap:wrap;margin-top:4px}
+.actions .r{display:flex;gap:8px}
+.tabs{display:grid;grid-template-columns:1fr 1fr;background:var(--sunk);border-radius:12px;padding:4px;gap:4px}
+.tab{border:0;background:transparent;color:var(--muted);font:600 14px Onest,system-ui,sans-serif;padding:10px 8px;border-radius:9px;cursor:pointer}
+.tab[aria-selected="true"]{background:var(--surface);color:var(--ink);box-shadow:0 1px 3px rgba(0,0,0,.08)}
+.tab .n{font-weight:500;color:var(--muted);margin-left:4px}
+.group{display:flex;flex-direction:column;gap:8px}
+.group-h{display:flex;justify-content:space-between;align-items:baseline;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);padding-top:6px}
+.hook{grid-column:1/-1;font-size:13px;color:var(--ink);background:var(--sunk);border-radius:8px;padding:6px 9px;overflow-wrap:anywhere}
+.meta a{color:var(--accent);text-decoration:none;font-weight:500}
+.bar-actions{display:flex;gap:8px;flex-wrap:wrap}
+.help{font-size:12px;color:var(--muted);line-height:1.5}
+.toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(84px + env(safe-area-inset-bottom,0px));background:var(--ink);color:var(--ground);padding:8px 14px;border-radius:9px;font-size:13px;z-index:20;max-width:calc(100% - 32px);text-align:center}
+.gate{max-width:420px;margin:0 auto;padding:60px 20px;text-align:center;display:flex;flex-direction:column;gap:12px}
+.gate h1{font-size:19px}
+.gate p{color:var(--muted);font-size:14px;margin:0;line-height:1.5}
+@media (prefers-reduced-motion:reduce){.bar i{transition:none}}
+</style>
+</head>
+<body>
+
+<div class="gate" id="gate">
+  <h1 id="gateTitle">Загружаю базу…</h1>
+  <p id="gateText"></p>
+  <div><button class="btn" type="button" id="gateRetry" hidden>Попробовать снова</button></div>
+</div>
+
+<div class="wrap" id="app" hidden>
+  <div class="top">
+    <h1>CRM</h1>
+    <span class="sub num" id="week"></span>
+  </div>
+  <div class="banner" id="banner" hidden></div>
+
+  <div class="tabs" role="tablist">
+    <button class="tab" type="button" role="tab" id="tab-queue" data-tab="queue">Кому написать<span class="n num" id="queueN"></span></button>
+    <button class="tab" type="button" role="tab" id="tab-work" data-tab="work">В работе<span class="n num" id="workN"></span></button>
+  </div>
+
+  <div id="view-queue" class="sec" hidden>
+    <div class="sec-h"><h2>Потенциальные контакты</h2><span class="count num" id="queueCount"></span></div>
+    <div class="help">Здесь все, кому ещё не писал. Нажал «Написал» — человек уходит во вкладку «В работе».</div>
+    <div class="bar-actions">
+      <button class="btn primary" type="button" id="bulk">Добавить списком</button>
+      <button class="btn" type="button" id="addOne">+ Один контакт</button>
+    </div>
+    <div class="chips" id="srcChips" role="toolbar" aria-label="Фильтр по источнику"></div>
+    <div id="queue" class="sec"></div>
+  </div>
+
+  <div id="view-work" class="sec" hidden style="gap:22px">
+    <section class="sec">
+      <div class="sec-h"><h2>План недели</h2><span class="count">считается по кнопке «Написал»</span></div>
+      <div class="plan" id="plan"></div>
+    </section>
+
+    <section class="sec">
+      <div class="sec-h"><h2>Коснуться сегодня</h2><span class="count num" id="dueCount"></span></div>
+      <div class="list" id="due"></div>
+    </section>
+
+    <section class="sec">
+      <div class="sec-h"><h2>Вся база</h2><span class="count num" id="allCount"></span></div>
+      <input class="search" id="q" type="search" placeholder="Поиск по имени, нише, заметкам">
+      <div class="chips" id="chips" role="toolbar" aria-label="Фильтр по статусу"></div>
+      <div class="list" id="all"></div>
+    </section>
+  </div>
+</div>
+
+<button class="fab" id="add" type="button" hidden>+ Контакт</button>
+
+<dialog id="dlg">
+  <form class="sheet" id="form" method="dialog">
+    <h2 id="formTitle">Новый контакт</h2>
+    <div class="f"><label for="f-name">Имя</label><input id="f-name" required autocomplete="off"></div>
+    <div class="two">
+      <div class="f"><label for="f-contact">Контакт (@ник или ссылка)</label><input id="f-contact" autocomplete="off"></div>
+      <div class="f"><label for="f-niche">Ниша и проект</label><input id="f-niche" autocomplete="off"></div>
+    </div>
+    <div class="two">
+      <div class="f"><label for="f-source">Откуда</label><select id="f-source"></select></div>
+      <div class="f"><label for="f-status">Статус</label><select id="f-status"></select></div>
+    </div>
+    <div class="f"><label for="f-hook">Зацепка для первого сообщения</label><textarea id="f-hook" placeholder="Что заметил у него: рилс, пост, проблема в шапке"></textarea></div>
+    <div class="f"><label for="f-found">Что выяснил: задача, боль, точка Б</label><textarea id="f-found" placeholder="Его словами: что должно случиться через 1–2 месяца"></textarea></div>
+    <div class="two">
+      <div class="f"><label for="f-last">Последний контакт</label><input id="f-last" type="date"></div>
+      <div class="f"><label for="f-next">Следующее касание</label><input id="f-next" type="date"></div>
+    </div>
+    <div class="f"><label for="f-note">Комментарий</label><textarea id="f-note"></textarea></div>
+    <div class="actions">
+      <button class="btn danger" type="button" id="del">Удалить</button>
+      <div class="r">
+        <button class="btn" type="button" id="cancel">Отмена</button>
+        <button class="btn primary" type="submit" id="save">Сохранить</button>
+      </div>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="bulkDlg">
+  <form class="sheet" id="bulkForm" method="dialog">
+    <h2>Добавить списком</h2>
+    <div class="two">
+      <div class="f"><label for="b-source">Откуда</label><select id="b-source"></select></div>
+      <div class="f"><label for="b-niche">Ниша для всех (необязательно)</label><input id="b-niche" autocomplete="off" placeholder="например, арабский"></div>
+    </div>
+    <div class="f"><label for="b-text">Один человек — одна строка</label>
+      <textarea id="b-text" style="min-height:160px" placeholder="Ахмад — @ahmad_arabic — преподаёт арабский&#10;Иса | t.me/isa_coach | тренер по борьбе&#10;@yusuf_finance"></textarea></div>
+    <div class="help">Формат: имя — контакт — ниша. Разделитель: тире, «|» или «;». Можно только @ник или ссылку. Дубли отсеются сами.</div>
+    <div class="actions">
+      <span class="help num" id="bulkPreview"></span>
+      <div class="r">
+        <button class="btn" type="button" id="bulkCancel">Отмена</button>
+        <button class="btn primary" type="submit" id="bulkSave">Добавить</button>
+      </div>
+    </div>
+  </form>
+</dialog>
+
+<script src="/app.js"></script>
+</body>
+</html>

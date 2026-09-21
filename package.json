@@ -1,0 +1,20 @@
+{
+  "name": "aqillych-crm",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "CRM для работы с потенциальными клиентами: Telegram Mini App + бот на Cloudflare Workers",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "db:init": "wrangler d1 execute crm --remote --file=./schema.sql",
+    "db:init:local": "wrangler d1 execute crm --local --file=./schema.sql",
+    "bot:setup": "node scripts/setup-bot.mjs",
+    "test": "node --test",
+    "test:e2e": "./e2e/run.sh",
+    "test:e2e:ui": "./e2e/run.sh --ui"
+  },
+  "devDependencies": {
+    "wrangler": "^4.0.0"
+  }
+}
