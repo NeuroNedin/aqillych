@@ -21,7 +21,7 @@ const AT_NINE_TASHKENT = new Date("2026-09-21T04:00:00Z");
 
 test("сводка уходит в назначенный час и только раз в день", async () => {
   const { db, env } = await setup();
-  await saveLead(db, OWNER, null, { name: "Ахмад", contact: "@a", status: "sent", next: "2026-09-18" }, ctx);
+  await saveLead(db, OWNER, null, { name: "Ахмад", contact: "@a", status: "wrote", next: "2026-09-18" }, ctx);
 
   const tg = captureTelegram();
   try {
@@ -76,7 +76,7 @@ test("в сводке стоят цели этого человека, а не �
     const text = tg.of("sendMessage")[0].body.text;
     assert.match(text, /партнёры 0\/5/);
     assert.match(text, /холодные 0\/50/);
-    assert.match(text, /предоплаты 0\/2/);
+    assert.match(text, /счета 0\/2/);
   } finally {
     tg.restore();
   }
@@ -100,7 +100,7 @@ test("строки с целью 0 в сводку не попадают", async
 
 test("сводка показывает просрочки и очередь, а закрытые карточки — нет", async () => {
   const { db, env } = await setup();
-  await saveLead(db, OWNER, null, { name: "Ахмад", contact: "@a", status: "sent", next: "2026-09-18" }, ctx);
+  await saveLead(db, OWNER, null, { name: "Ахмад", contact: "@a", status: "wrote", next: "2026-09-18" }, ctx);
   await saveLead(db, OWNER, null, { name: "Иса", contact: "@i", status: "new" }, ctx);
   await saveLead(db, OWNER, null, { name: "Закрытый", contact: "@z", status: "no", next: "2026-09-01" }, ctx);
 

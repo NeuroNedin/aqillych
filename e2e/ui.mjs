@@ -43,7 +43,7 @@ await api("/api/bulk", { text: "Дильноза — @dilnoza_pr — пиар\n�
 const state = await api("/api/lead", { name: "Санжар", contact: "@sanjar_coach", niche: "ораторка", source: "partner", status: "call", next: "2026-09-22" });
 const ahmad = state.leads.find((l) => l.name === "Ахмад");
 await api("/api/wrote", { id: ahmad.id });
-await api("/api/lead", { id: ahmad.id, ...ahmad, status: "chat", next: "2020-01-01" });
+await api("/api/lead", { id: ahmad.id, ...ahmad, status: "interested", next: "2020-01-01" });
 
 const browser = await chromium.launch(process.env.CHROME_PATH ? { executablePath: process.env.CHROME_PATH } : {});
 const page = await browser.newPage({ viewport: { width: 400, height: 860 }, deviceScaleFactor: 2 });
@@ -91,6 +91,7 @@ check("просроченный показан", (await page.textContent("#due")
 check("просрочка подсвечена", await page.isVisible("#due .when.late"));
 check("у прошлогодней даты показан год", /с 1 янв 2020/.test(await page.textContent("#due")), await page.textContent("#due .when"));
 check("в базе 8 карточек", (await page.textContent("#allCount")).includes("8"), await page.textContent("#allCount"));
+check("этапы воронки видны в фильтрах", (await page.textContent("#chips")).includes("Заинтересован"), await page.textContent("#chips"));
 await page.screenshot({ path: `${OUT}/work.png`, fullPage: true });
 
 console.log("\n— поиск и фильтры —");
@@ -98,9 +99,9 @@ await page.fill("#q", "борьб");
 await page.waitForTimeout(150);
 check("поиск по нише находит", (await page.locator("#all .card").count()) === 1, await page.locator("#all .card").count());
 await page.fill("#q", "");
-await page.click('#chips .chip:has-text("Созвон назначен")');
+await page.click('#chips .chip:has-text("Вывел на созвон")');
 await page.waitForTimeout(150);
-check("фильтр по статусу работает", (await page.textContent("#all")).includes("Санжар"));
+check("фильтр по этапу работает", (await page.textContent("#all")).includes("Санжар"));
 await page.click('#chips .chip:has-text("Все")');
 
 console.log("\n— кнопка «Написал» —");

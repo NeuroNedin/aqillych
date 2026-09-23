@@ -50,6 +50,8 @@ export async function migrate(env) {
   }
   await db.prepare(UNIQUE_CONTACT_INDEX).run();
 
+  await migrateStatuses(db);
+
   if (owner) await ensureOwnerAccount(db, owner);
 }
 
@@ -76,4 +78,25 @@ async function ensureOwnerAccount(db, owner) {
       lastDigest?.value ?? "",
     )
     .run();
+}
+
+/**
+ * Статусы первой версии заменены воронкой продаж. Соответствие подобрано
+ * так, чтобы никто не откатился назад по воронке:
+ * «в переписке» и «думает» — это уже проявленный интерес, а «в работе»
+ * дальше всего, поэтому приравнивается к выставленному счёту.
+ */
+const STATUS_MOVES = {
+  sent: "wrote",
+  chat: "interested",
+  think: "interested",
+  work: "invoice",
+};
+
+async function migrateStatuses(db) {
+  await db.batch(
+    Object.entries(STATUS_MOVES).map(([from, to]) =>
+      db.prepare("UPDATE leads SET status = ? WHERE status = ?").bind(to, from),
+    ),
+  );
 }

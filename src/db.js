@@ -123,7 +123,7 @@ export async function saveLead(db, owner, id, input, { today, nowIso }) {
   const before = previous?.status ?? null;
   if (fields.status !== before) {
     if (fields.status === "call") await addLog(db, owner, { date: today, kind: "call", lead: id });
-    if (fields.status === "work") await addLog(db, owner, { date: today, kind: "prepay", lead: id });
+    if (fields.status === "invoice") await addLog(db, owner, { date: today, kind: "prepay", lead: id });
   }
 
   return { id };
@@ -145,7 +145,7 @@ export async function markWrote(db, owner, id, { today, followDays = DEFAULT_FOL
   if (CLOSED.has(lead.status)) return { error: "Карточка уже закрыта" };
 
   const next = addDays(today, followDays);
-  const status = !lead.status || lead.status === "new" ? "sent" : lead.status;
+  const status = !lead.status || lead.status === "new" ? "wrote" : lead.status;
 
   await db
     .prepare("UPDATE leads SET last=?, next=?, status=?, updated=? WHERE owner=? AND id=?")

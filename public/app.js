@@ -26,7 +26,10 @@
   var loadedAt = 0;
 
   // Цвет статуса — дело оформления, поэтому живёт здесь, а не в данных.
-  var STATUS_CLASS = { sent: "s-sent", chat: "s-chat", call: "s-call", think: "s-think", work: "s-work", no: "s-no" };
+  var STATUS_CLASS = {
+    wrote: "s-sent", interested: "s-chat", qualified: "s-chat",
+    call: "s-call", terms: "s-think", invoice: "s-work", no: "s-no",
+  };
 
   var $ = function (id) { return document.getElementById(id); };
 

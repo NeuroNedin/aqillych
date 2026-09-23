@@ -113,3 +113,60 @@ test("без OWNER_ID миграция не падает и никому нич�
   const { results } = await db.prepare("SELECT DISTINCT owner FROM leads").all();
   assert.deepEqual(results, [{ owner: "" }]);
 });
+
+test("старые статусы переезжают на этапы воронки", async () => {
+  const db = createD1();
+  db.exec(`
+    CREATE TABLE leads (
+      id TEXT PRIMARY KEY, name TEXT NOT NULL DEFAULT '', contact TEXT NOT NULL DEFAULT '',
+      contact_key TEXT NOT NULL DEFAULT '', niche TEXT NOT NULL DEFAULT '',
+      source TEXT NOT NULL DEFAULT 'cold', status TEXT NOT NULL DEFAULT 'new',
+      hook TEXT NOT NULL DEFAULT '', found TEXT NOT NULL DEFAULT '', note TEXT NOT NULL DEFAULT '',
+      last TEXT NOT NULL DEFAULT '', next TEXT NOT NULL DEFAULT '',
+      created TEXT NOT NULL DEFAULT '', updated TEXT NOT NULL DEFAULT ''
+    );
+    CREATE TABLE log (id TEXT PRIMARY KEY, date TEXT NOT NULL, kind TEXT NOT NULL, plan TEXT NOT NULL DEFAULT '', lead TEXT NOT NULL DEFAULT '');
+    CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL DEFAULT '');
+    INSERT INTO leads (id, name, status) VALUES
+      ('a', 'Новый',      'new'),
+      ('b', 'Написал',    'sent'),
+      ('c', 'Переписка',  'chat'),
+      ('d', 'Думает',     'think'),
+      ('e', 'Созвон',     'call'),
+      ('f', 'В работе',   'work'),
+      ('g', 'Отложен',    'later'),
+      ('h', 'Не подходит','no');
+  `);
+  await migrate({ DB: db, OWNER_ID: OWNER });
+
+  const leads = await listLeads(db, OWNER);
+  const byName = Object.fromEntries(leads.map((l) => [l.name, l.status]));
+  assert.deepEqual(byName, {
+    "Новый": "new",
+    "Написал": "wrote",
+    "Переписка": "interested",
+    "Думает": "interested",
+    "Созвон": "call",
+    "В работе": "invoice",
+    "Отложен": "later",
+    "Не подходит": "no",
+  });
+});
+
+test("никто не откатывается назад по воронке", async () => {
+  const { FUNNEL } = await import("../src/domain.js");
+  const moves = { sent: "wrote", chat: "interested", think: "interested", work: "invoice" };
+  // Прежний порядок статусов первой версии.
+  const before = ["sent", "chat", "think", "call", "work"];
+  const after = before.map((s) => moves[s] ?? s);
+  const positions = after.map((s) => FUNNEL.indexOf(s));
+  assert.deepEqual(positions, [...positions].sort((a, b) => a - b), after.join(" → "));
+});
+
+test("перенос статусов повторяется без вреда", async () => {
+  const db = legacyDb();
+  await migrate({ DB: db, OWNER_ID: OWNER });
+  const first = (await listLeads(db, OWNER)).map((l) => l.status).sort();
+  await migrate({ DB: db, OWNER_ID: OWNER });
+  assert.deepEqual((await listLeads(db, OWNER)).map((l) => l.status).sort(), first);
+});

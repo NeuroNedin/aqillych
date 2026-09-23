@@ -164,16 +164,16 @@ console.log("\n— «Написал» —");
 const wrote = await api("/api/wrote", { id: ahmad.id });
 check("wrote отдаёт 200", wrote.status === 200, wrote.data);
 const ahmadAfter = wrote.data.leads.find((l) => l.id === ahmad.id);
-check("статус стал «написал»", ahmadAfter?.status === "sent", ahmadAfter?.status);
+check("статус стал «написал»", ahmadAfter?.status === "wrote", ahmadAfter?.status);
 check("дата касания = сегодня", ahmadAfter?.last === start.data.today, ahmadAfter?.last);
 check("следующее касание через 3 дня", ahmadAfter?.next === wrote.data.next, [ahmadAfter?.next, wrote.data.next]);
 check("сообщение попало в план недели", wrote.data.log.some((e) => e.kind === "msg" && e.plan === "cold"), wrote.data.log);
 
 console.log("\n— карточка —");
-const created = await api("/api/lead", { name: "Фотима", contact: "@fotima_smm", niche: "таргет", source: "warm", status: "chat" });
+const created = await api("/api/lead", { name: "Фотима", contact: "@fotima_smm", niche: "таргет", source: "warm", status: "interested" });
 check("создание отдаёт 200", created.status === 200, created.data);
 const fotima = created.data.leads.find((l) => l.name === "Фотима");
-check("карточка сохранена", !!fotima && fotima.source === "warm" && fotima.status === "chat", fotima);
+check("карточка сохранена", !!fotima && fotima.source === "warm" && fotima.status === "interested", fotima);
 
 const dupe = await api("/api/lead", { name: "Фотима клон", contact: "t.me/fotima_smm" });
 check("тот же контакт другой карточкой → 400", dupe.status === 400, dupe.status);
@@ -182,10 +182,14 @@ check("ошибка называет, кем занят контакт", /Фот
 const toCall = await api("/api/lead", { id: fotima.id, name: "Фотима", contact: "@fotima_smm", status: "call", source: "warm" });
 check("созвон засчитан в план", toCall.data.log.some((e) => e.kind === "call"), toCall.data.log);
 
-const toWork = await api("/api/lead", { id: fotima.id, name: "Фотима", contact: "@fotima_smm", status: "work", source: "warm", next: "2030-01-01" });
-check("предоплата засчитана в план", toWork.data.log.some((e) => e.kind === "prepay"));
-const closed = toWork.data.leads.find((l) => l.id === fotima.id);
-check("у закрытой карточки снято касание", closed?.next === "", closed?.next);
+const toInvoice = await api("/api/lead", { id: fotima.id, name: "Фотима", contact: "@fotima_smm", status: "invoice", source: "warm", next: "2030-01-01" });
+check("счёт засчитан в план", toInvoice.data.log.some((e) => e.kind === "prepay"));
+const invoiced = toInvoice.data.leads.find((l) => l.id === fotima.id);
+check("выставленный счёт ещё надо дожимать — касание остаётся", invoiced?.next === "2030-01-01", invoiced?.next);
+
+const toNo = await api("/api/lead", { id: fotima.id, name: "Фотима", contact: "@fotima_smm", status: "no", source: "warm", next: "2030-01-01" });
+const closed = toNo.data.leads.find((l) => l.id === fotima.id);
+check("у отказавшегося касание снято", closed?.next === "", closed?.next);
 
 const wroteClosed = await api("/api/wrote", { id: fotima.id });
 check("по закрытой карточке «Написал» отклонён", wroteClosed.status === 400, wroteClosed.status);
