@@ -10,7 +10,8 @@
   var dict = null;
   var S = {};           // статус -> описание
   var SRC = {};         // источник -> описание
-  var PLAN = [];
+  var PLAN = [];        // названия строк плана
+  var settings = null;  // цели, дни напоминания, время сводки, часовой пояс
   var leads = [];
   var log = [];
   var serverToday = "";
@@ -88,6 +89,7 @@
       fillSelect($("b-source"), dict.sources);
       $("b-source").value = "cold";
     }
+    if (data.settings) settings = data.settings;
     if (data.leads) leads = data.leads;
     if (data.log) log = data.log;
     if (data.today) serverToday = data.today;
@@ -190,11 +192,16 @@
       if (e.kind === "call") counts.call++;
       if (e.kind === "prepay") counts.prepay++;
     });
-    $("plan").innerHTML = PLAN.map(function (p) {
-      var v = counts[p.k], pct = Math.min(100, Math.round((v / p.goal) * 100));
-      return '<div class="meter' + (v >= p.goal ? " done" : "") + '"><div class="lbl"><span>' + esc(p.t) +
-        '</span><b class="num">' + v + " / " + p.goal + '</b></div><div class="bar"><i style="width:' + pct + '%"></i></div></div>';
-    }).join("") + '<div class="hint">Правило: +1 когда отправил первое сообщение или дожим. Созвон и предоплата считаются сами, когда меняешь статус.</div>';
+    var goals = (settings && settings.goals) || {};
+    var shown = PLAN.filter(function (p) { return (goals[p.k] || 0) > 0; });
+    $("plan").innerHTML = (shown.length
+      ? shown.map(function (p) {
+          var goal = goals[p.k], v = counts[p.k], pct = Math.min(100, Math.round((v / goal) * 100));
+          return '<div class="meter' + (v >= goal ? " done" : "") + '"><div class="lbl"><span>' + esc(p.t) +
+            '</span><b class="num">' + v + " / " + goal + '</b></div><div class="bar"><i style="width:' + pct + '%"></i></div></div>';
+        }).join("")
+      : '<div class="hint" style="grid-column:1/-1;border:0;padding:0">Цели не заданы. Нажми «Настроить».</div>')
+      + '<div class="hint">Правило: +1 когда отправил первое сообщение или дожим. Созвон и предоплата считаются сами, когда меняешь статус.</div>';
 
     var due = leads.filter(function (l) { return !CLOSED[l.status] && l.next && l.next <= serverToday; })
       .sort(function (a, b) { return a.next < b.next ? -1 : 1; });
@@ -376,6 +383,84 @@
       });
   }
 
+  /* ---------- настройки ---------- */
+  function hourLabel(h) { return (h < 10 ? "0" : "") + h + ":00"; }
+
+  function tzLabel(minutes) {
+    var sign = minutes < 0 ? "−" : "+";
+    var abs = Math.abs(minutes);
+    var hh = Math.floor(abs / 60);
+    var mm = abs % 60;
+    return "UTC" + sign + hh + (mm ? ":" + (mm < 10 ? "0" : "") + mm : "");
+  }
+
+  // Смещение телефона: Date возвращает его в обратном знаке.
+  function deviceOffset() { return -new Date().getTimezoneOffset(); }
+
+  function fillSettingsControls() {
+    var hours = [];
+    for (var h = 0; h < 24; h++) hours.push('<option value="' + h + '">' + hourLabel(h) + "</option>");
+    $("s-hour").innerHTML = hours.join("");
+
+    var zones = [];
+    for (var m = -720; m <= 840; m += 60) zones.push('<option value="' + m + '">' + tzLabel(m) + "</option>");
+    // Часовые пояса с получасовым сдвигом встречаются реже, но пусть будут.
+    [-570, -210, 210, 270, 330, 345, 570, 630, 690, 765, 825].forEach(function (m) {
+      zones.push('<option value="' + m + '">' + tzLabel(m) + "</option>");
+    });
+    zones.sort(function (a, b) {
+      return Number(a.match(/value="(-?\d+)"/)[1]) - Number(b.match(/value="(-?\d+)"/)[1]);
+    });
+    $("s-tz").innerHTML = zones.join("");
+  }
+
+  function showTzNow() {
+    var offset = Number($("s-tz").value);
+    var local = new Date(Date.now() + offset * 60000);
+    $("tzNow").textContent = "Сейчас там " + hourLabel(local.getUTCHours()).slice(0, 2) + ":" +
+      ("0" + local.getUTCMinutes()).slice(-2);
+  }
+
+  function openSettings() {
+    if (!settings) return;
+    $("goals").innerHTML = PLAN.map(function (p) {
+      return '<label class="goal"><span>' + esc(p.t) + '</span>' +
+        '<input type="number" inputmode="numeric" min="0" max="999" data-goal="' + p.k + '" value="' +
+        (settings.goals[p.k] || 0) + '"></label>';
+    }).join("");
+    $("s-follow").value = settings.followDays;
+    $("s-hour").value = String(settings.digestHour);
+    $("s-tz").value = String(settings.tzOffset);
+    showTzNow();
+    $("setDlg").showModal();
+  }
+
+  function saveSettings() {
+    if (busy) return;
+    busy = true;
+    $("setSave").disabled = true;
+
+    var goals = {};
+    Array.prototype.forEach.call($("goals").querySelectorAll("[data-goal]"), function (input) {
+      goals[input.dataset.goal] = Number(input.value) || 0;
+    });
+
+    api("/api/settings", {
+      goals: goals,
+      followDays: Number($("s-follow").value) || 3,
+      digestHour: Number($("s-hour").value),
+      tzOffset: Number($("s-tz").value),
+    }).then(function (data) {
+      applyState(data);
+      $("setDlg").close();
+      haptic("success");
+      toast("Настройки сохранены");
+    }).catch(fail).then(function () {
+      busy = false;
+      $("setSave").disabled = false;
+    });
+  }
+
   function setTab(next) {
     tab = next;
     try { localStorage.setItem("crm-tab", tab); } catch (e) {}
@@ -441,6 +526,15 @@
   $("add").addEventListener("click", function () { openForm(null); });
   $("addOne").addEventListener("click", function () { openForm(null); });
   $("bulk").addEventListener("click", function () { $("bulkDlg").showModal(); });
+  $("openSettings").addEventListener("click", openSettings);
+  $("setCancel").addEventListener("click", function () { $("setDlg").close(); });
+  $("setForm").addEventListener("submit", function (e) { e.preventDefault(); saveSettings(); });
+  $("s-tz").addEventListener("change", showTzNow);
+  $("tzAuto").addEventListener("click", function () {
+    $("s-tz").value = String(deviceOffset());
+    showTzNow();
+    toast("Взял пояс с телефона");
+  });
   $("bulkCancel").addEventListener("click", function () { $("bulkDlg").close(); });
   $("b-text").addEventListener("input", updateBulkPreview);
   $("bulkForm").addEventListener("submit", function (e) { e.preventDefault(); saveBulk(); });
@@ -471,6 +565,8 @@
       document.documentElement.dataset.theme = tg.colorScheme === "dark" ? "dark" : "light";
     });
   }
+
+  fillSettingsControls();
 
   if (!initData) {
     showGate("Открой через Telegram", "Эта страница — мини-апп: она работает только внутри бота, который её выдал.");

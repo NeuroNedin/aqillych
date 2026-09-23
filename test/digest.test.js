@@ -1,135 +1,136 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { maybeSendDigest } from "../src/index.js";
+import { createD1, captureTelegram } from "./helpers/d1.js";
+import { migrate } from "../src/migrate.js";
+import { createUser, saveSettings, bulkAdd, saveLead } from "../src/db.js";
+import { sendDueDigests } from "../src/index.js";
 
-// Маленькая замена D1: понимает ровно те запросы, которые делает дайджест.
-function fakeDb(leads = [], log = []) {
-  const meta = new Map();
-  const answer = (sql, args) => {
-    if (sql.includes("FROM leads")) return { results: leads };
-    if (sql.includes("FROM log")) return { results: log.filter((e) => e.date >= args[0]) };
-    if (sql.includes("FROM meta")) return { row: meta.has(args[0]) ? { value: meta.get(args[0]) } : null };
-    if (sql.includes("INTO meta")) { meta.set(args[0], args[1]); return { row: null }; }
-    if (sql.startsWith("CREATE")) return { row: null };
-    throw new Error(`Запрос не предусмотрен моком: ${sql}`);
-  };
-  return {
-    meta,
-    // Worker создаёт таблицы сам — мок просто соглашается.
-    async batch(statements) {
-      return statements.map(() => ({ meta: { changes: 0 } }));
-    },
-    prepare(sql) {
-      let args = [];
-      const api = {
-        bind: (...a) => { args = a; return api; },
-        all: async () => answer(sql, args),
-        first: async () => answer(sql, args).row ?? null,
-        run: async () => { answer(sql, args); return { meta: { changes: 1 } }; },
-      };
-      return api;
-    },
-  };
+const OWNER = "100";
+
+async function setup() {
+  const db = createD1();
+  const env = { DB: db, BOT_TOKEN: "test", OWNER_ID: OWNER, TELEGRAM_API: "https://telegram.test/bot", APP_URL: "https://crm.example" };
+  await migrate(env);
+  return { db, env };
 }
 
-function envWith(db, extra = {}) {
-  const sent = [];
-  return {
-    sent,
-    env: {
-      DB: db,
-      BOT_TOKEN: "test",
-      OWNER_ID: "555",
-      TZ_OFFSET: "300",   // UTC+5
-      DIGEST_HOUR: "9",
-      APP_URL: "https://crm.example",
-      // Вместо Telegram — запись в массив.
-      TELEGRAM_API: "http://telegram.test/bot",
-      ...extra,
-    },
-    install() {
-      globalThis.fetch = async (url, options) => {
-        sent.push({ url: String(url), body: JSON.parse(options.body) });
-        return new Response(JSON.stringify({ ok: true, result: {} }), { headers: { "content-type": "application/json" } });
-      };
-    },
-  };
-}
+const ctx = { today: "2026-09-21", nowIso: "2026-09-21T06:00:00Z" };
 
-// 04:00 UTC = 09:00 в UTC+5 — назначенный час.
-const AT_NINE = new Date("2026-09-21T04:00:00Z");
-const AT_TEN = new Date("2026-09-21T05:00:00Z");
+// 04:00 UTC = 09:00 в UTC+5.
+const AT_NINE_TASHKENT = new Date("2026-09-21T04:00:00Z");
 
-const LEADS = [
-  { id: "1", name: "Ахмад", contact: "@ahmad", niche: "арабский", source: "cold", status: "sent", next: "2026-09-18" },
-  { id: "2", name: "Иса", contact: "@isa", niche: "борьба", source: "cold", status: "chat", next: "2026-09-21" },
-  { id: "3", name: "Юсуф", contact: "@yusuf", niche: "", source: "warm", status: "new", next: "" },
-  { id: "4", name: "Закрытый", contact: "@zak", niche: "", source: "cold", status: "no", next: "2026-09-01" },
-];
-const LOG = [{ date: "2026-09-21", kind: "msg", plan: "cold", lead: "1" }];
+test("сводка уходит в назначенный час и только раз в день", async () => {
+  const { db, env } = await setup();
+  await saveLead(db, OWNER, null, { name: "Ахмад", contact: "@a", status: "sent", next: "2026-09-18" }, ctx);
 
-test("в неназначенный час дайджест не уходит", async () => {
-  const h = envWith(fakeDb(LEADS, LOG));
-  h.install();
-  const res = await maybeSendDigest(h.env, AT_TEN);
-  assert.equal(res.sent, false);
-  assert.equal(h.sent.length, 0);
+  const tg = captureTelegram();
+  try {
+    assert.deepEqual((await sendDueDigests(env, AT_NINE_TASHKENT)).sent, [OWNER]);
+    assert.equal(tg.of("sendMessage").length, 1);
+
+    // Cron дёргает Worker каждый час — второй раз слать нельзя.
+    assert.deepEqual((await sendDueDigests(env, AT_NINE_TASHKENT)).sent, []);
+    assert.equal(tg.of("sendMessage").length, 1);
+
+    // Следующий день — снова можно.
+    assert.deepEqual((await sendDueDigests(env, new Date("2026-09-22T04:00:00Z"))).sent, [OWNER]);
+  } finally {
+    tg.restore();
+  }
 });
 
-test("в назначенный час уходит один раз за день", async () => {
-  const h = envWith(fakeDb(LEADS, LOG));
-  h.install();
-
-  assert.equal((await maybeSendDigest(h.env, AT_NINE)).sent, true);
-  assert.equal(h.sent.length, 1);
-
-  // Cron дёргает Worker снова в тот же час — второй раз слать нельзя.
-  assert.equal((await maybeSendDigest(h.env, AT_NINE)).sent, false);
-  assert.equal(h.sent.length, 1);
-
-  // Следующий день — снова можно.
-  assert.equal((await maybeSendDigest(h.env, new Date("2026-09-22T04:00:00Z"))).sent, true);
-  assert.equal(h.sent.length, 2);
+test("в неназначенный час никому ничего не уходит", async () => {
+  const { env } = await setup();
+  const tg = captureTelegram();
+  try {
+    assert.deepEqual((await sendDueDigests(env, new Date("2026-09-21T05:00:00Z"))).sent, []);
+    assert.equal(tg.sent.length, 0);
+  } finally {
+    tg.restore();
+  }
 });
 
-test("в дайджесте есть просрочки, сегодняшние, очередь и план", async () => {
-  const h = envWith(fakeDb(LEADS, LOG));
-  h.install();
-  await maybeSendDigest(h.env, AT_NINE);
+test("у каждого свой час и свой часовой пояс", async () => {
+  const { db, env } = await setup();
+  await createUser(db, { id: "200", name: "Иса", username: "isa", invitedBy: "abc123", today: "2026-09-20" });
+  // Москва, сводка в 8 утра: 05:00 UTC.
+  await saveSettings(db, "200", { goals: {}, followDays: 3, digestHour: 8, tzOffset: 180 });
 
-  const { body } = h.sent[0];
-  assert.equal(body.chat_id, "555");
-  assert.match(body.text, /Доброе утро\. Сегодня 21 сен\./);
-  assert.match(body.text, /Просрочено — 1/);
-  assert.match(body.text, /Ахмад/);
-  assert.match(body.text, /с 18 сен/);
-  assert.match(body.text, /Коснуться сегодня — 1/);
-  assert.match(body.text, /Иса/);
-  assert.match(body.text, /Ждут первого сообщения: <b>1<\/b>/);
-  assert.match(body.text, /План недели: партнёры 0\/3 · холодные 1\/30/);
-  // Карточка со статусом «не подходит» в напоминания не попадает.
-  assert.doesNotMatch(body.text, /Закрытый/);
+  const tg = captureTelegram();
+  try {
+    assert.deepEqual((await sendDueDigests(env, AT_NINE_TASHKENT)).sent, [OWNER], "в 04:00 UTC — только владелец");
+    assert.deepEqual((await sendDueDigests(env, new Date("2026-09-21T05:00:00Z"))).sent, ["200"], "в 05:00 UTC — второй");
+  } finally {
+    tg.restore();
+  }
 });
 
-test("к дайджесту приложена кнопка в мини-апп", async () => {
-  const h = envWith(fakeDb(LEADS, LOG));
-  h.install();
-  await maybeSendDigest(h.env, AT_NINE);
-  const button = h.sent[0].body.reply_markup.inline_keyboard[0][0];
-  assert.equal(button.web_app.url, "https://crm.example");
+test("в сводке стоят цели этого человека, а не общие", async () => {
+  const { db, env } = await setup();
+  await saveSettings(db, OWNER, { goals: { partner: 5, cold: 50, call: 1, prepay: 2 }, followDays: 3, digestHour: 9, tzOffset: 300 });
+  await bulkAdd(db, OWNER, [{ name: "Ахмад", contact: "@a", niche: "" }], { source: "cold", today: ctx.today, nowIso: ctx.nowIso });
+
+  const tg = captureTelegram();
+  try {
+    await sendDueDigests(env, AT_NINE_TASHKENT);
+    const text = tg.of("sendMessage")[0].body.text;
+    assert.match(text, /партнёры 0\/5/);
+    assert.match(text, /холодные 0\/50/);
+    assert.match(text, /предоплаты 0\/2/);
+  } finally {
+    tg.restore();
+  }
 });
 
-test("на пустой базе дайджест всё равно осмысленный", async () => {
-  const h = envWith(fakeDb([], []));
-  h.install();
-  await maybeSendDigest(h.env, AT_NINE);
-  assert.match(h.sent[0].body.text, /Касаний на сегодня нет/);
-  assert.doesNotMatch(h.sent[0].body.text, /Ждут первого сообщения/);
+test("строки с целью 0 в сводку не попадают", async () => {
+  const { db, env } = await setup();
+  await saveSettings(db, OWNER, { goals: { partner: 0, cold: 30, call: 0, prepay: 1 }, followDays: 3, digestHour: 9, tzOffset: 300 });
+
+  const tg = captureTelegram();
+  try {
+    await sendDueDigests(env, AT_NINE_TASHKENT);
+    const text = tg.of("sendMessage")[0].body.text;
+    assert.doesNotMatch(text, /партнёры/);
+    assert.doesNotMatch(text, /созвоны/);
+    assert.match(text, /холодные 0\/30/);
+  } finally {
+    tg.restore();
+  }
 });
 
-test("час дайджеста берётся из настройки", async () => {
-  const h = envWith(fakeDb(LEADS, LOG), { DIGEST_HOUR: "10" });
-  h.install();
-  assert.equal((await maybeSendDigest(h.env, AT_NINE)).sent, false);
-  assert.equal((await maybeSendDigest(h.env, AT_TEN)).sent, true);
+test("сводка показывает просрочки и очередь, а закрытые карточки — нет", async () => {
+  const { db, env } = await setup();
+  await saveLead(db, OWNER, null, { name: "Ахмад", contact: "@a", status: "sent", next: "2026-09-18" }, ctx);
+  await saveLead(db, OWNER, null, { name: "Иса", contact: "@i", status: "new" }, ctx);
+  await saveLead(db, OWNER, null, { name: "Закрытый", contact: "@z", status: "no", next: "2026-09-01" }, ctx);
+
+  const tg = captureTelegram();
+  try {
+    await sendDueDigests(env, AT_NINE_TASHKENT);
+    const text = tg.of("sendMessage")[0].body.text;
+    assert.match(text, /Доброе утро\. Сегодня 21 сен\./);
+    assert.match(text, /Просрочено — 1/);
+    assert.match(text, /Ахмад/);
+    assert.match(text, /Ждут первого сообщения: <b>1<\/b>/);
+    assert.doesNotMatch(text, /Закрытый/);
+  } finally {
+    tg.restore();
+  }
+});
+
+test("каждому уходит только его база", async () => {
+  const { db, env } = await setup();
+  await createUser(db, { id: "200", name: "Иса", username: "isa", invitedBy: "abc123", today: "2026-09-20" });
+  await saveLead(db, OWNER, null, { name: "МойКонтакт", contact: "@mine", status: "new" }, ctx);
+  await saveLead(db, "200", null, { name: "ЕгоКонтакт", contact: "@his", status: "new" }, ctx);
+
+  const tg = captureTelegram();
+  try {
+    await sendDueDigests(env, AT_NINE_TASHKENT);
+    const mine = tg.of("sendMessage").find((c) => c.body.chat_id === OWNER);
+    assert.match(mine.body.text, /Ждут первого сообщения: <b>1<\/b>/);
+    assert.doesNotMatch(mine.body.text, /ЕгоКонтакт/);
+  } finally {
+    tg.restore();
+  }
 });

@@ -35,9 +35,8 @@ if ! curl -s -o /dev/null -X POST "http://localhost:$MOCK_PORT/bot/ping" -d '{}'
 fi
 echo '[]' > "$CALLS"
 
-node scripts/print-schema.mjs > "$WORK/schema.sql"
-npx wrangler d1 execute crm --local --file="$WORK/schema.sql" > /dev/null
-npx wrangler d1 execute crm --local --command "DELETE FROM leads; DELETE FROM log; DELETE FROM meta;" > /dev/null
+# Схему создаёт и обновляет сам Worker, поэтому начинаем с пустой базы.
+rm -rf .wrangler/state
 
 npx wrangler dev --port "$PORT" --local > "$WORK/wrangler.log" 2>&1 & WORKER_PID=$!
 for _ in $(seq 1 60); do
@@ -50,19 +49,29 @@ if ! curl -s -o /dev/null "http://localhost:$PORT/"; then
   exit 1
 fi
 
+# Владелец и привязка переживают очистку: иначе проверки начинались бы
+# с чужого состояния — без доступа и с неизвестным Telegram адресом.
+wipe_data() {
+  npx wrangler d1 execute crm --local --command \
+    "DELETE FROM leads; DELETE FROM log; DELETE FROM invites; DELETE FROM users WHERE id <> '555'; DELETE FROM meta WHERE key LIKE 'undo:%';" \
+    > /dev/null
+}
+
 echo "=== API ==="
 node e2e/api.mjs "$CALLS"
 
-npx wrangler d1 execute crm --local --command "DELETE FROM leads; DELETE FROM log; DELETE FROM meta;" > /dev/null
+wipe_data
 echo '[]' > "$CALLS"
 echo "=== Бот ==="
 node e2e/bot.mjs "$CALLS"
 
 if [ "${1:-}" = "--ui" ]; then
-  npx wrangler d1 execute crm --local --command "DELETE FROM leads; DELETE FROM log; DELETE FROM meta;" > /dev/null
+  wipe_data
   echo "=== Браузер ==="
-  mkdir -p "$WORK/shots"
-  node e2e/ui.mjs "$WORK/shots"
+  # Снимки экрана кладём рядом с проектом: по ним видно, что получилось.
+  mkdir -p .e2e-shots
+  node e2e/ui.mjs .e2e-shots
+  echo "Снимки экрана: .e2e-shots/"
 fi
 
 echo "Всё прошло."

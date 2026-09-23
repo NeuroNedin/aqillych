@@ -1,24 +1,17 @@
 // Точка входа Worker: статика мини-аппа, API для него, вебхук бота и cron.
 //
 // Страница лежит в ./public и отдаётся Cloudflare напрямую.
-// Сюда попадает только то, чего в ./public нет: /api/* и /tg/*.
+// Сюда попадает только то, чего в ./public нет: /api/*, /tg/* и /health.
 
 import { verifyInitData, deriveWebhookSecret, equalSecret } from "./auth.js";
 import { handleUpdate, sendDigest, wireBot, botStatus } from "./bot.js";
 import { parseList } from "./parse.js";
-import { getState, saveLead, deleteLead, markWrote, bulkAdd, getMeta, setMeta } from "./db.js";
-import { localDate, localHour, canonicalOrigin, STATUSES, SOURCES, PLAN, FOLLOW_DAYS } from "./domain.js";
-import { SCHEMA } from "./schema.js";
-
-// Таблицы создаются сами при первом обращении: так CRM разворачивается
-// без командной строки. Флаг живёт, пока жив изолят, — обычно это
-// одна проверка на холодный старт.
-let schemaReady = false;
-async function ensureSchema(env) {
-  if (schemaReady) return;
-  await env.DB.batch(SCHEMA.map((sql) => env.DB.prepare(sql)));
-  schemaReady = true;
-}
+import {
+  getState, saveLead, deleteLead, markWrote, bulkAdd,
+  getUser, listUsers, saveSettings, markDigestSent, getMeta, setMeta,
+} from "./db.js";
+import { localDate, localHour, canonicalOrigin, STATUSES, SOURCES, PLAN } from "./domain.js";
+import { migrate } from "./migrate.js";
 
 const json = (data, status = 200) =>
   new Response(JSON.stringify(data), {
@@ -26,12 +19,17 @@ const json = (data, status = 200) =>
     headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
   });
 
-const today = (env) => localDate(Number(env.TZ_OFFSET ?? 0));
+// Схема приводится к текущей при первом обращении: разворачивать CRM
+// можно без командной строки. Флаг живёт, пока жив изолят.
+let schemaReady = false;
+async function ensureSchema(env) {
+  if (schemaReady) return;
+  await migrate(env);
+  schemaReady = true;
+}
 
-// Мини-апп имеет право на запись только если Telegram подписал его данные
-// и за ними стоит владелец из OWNER_ID.
-// Причин отказа несколько, и лечатся они по-разному — общий текст
-// «не подтвердил вход» заставляет владельца гадать.
+/* ---------- доступ ---------- */
+
 const WHY_REFUSED = {
   no_init_data: "Telegram не передал данные входа. Открывай CRM кнопкой в боте, а не по ссылке в браузере.",
   no_hash: "Данные входа пришли без подписи — открой CRM заново кнопкой в боте.",
@@ -48,20 +46,27 @@ async function authorize(request, env) {
   const initData = request.headers.get("x-init-data") ?? "";
   const result = await verifyInitData(initData, env.BOT_TOKEN);
   if (!result.ok) {
-    const why = WHY_REFUSED[result.reason] ?? "Telegram не подтвердил вход.";
-    return {
-      error: json({ error: why, reason: result.reason, fields: result.fields ?? null }, 401),
-    };
-  }
-  if (String(result.user.id) !== String(env.OWNER_ID)) {
-    // Владельцу полезно увидеть собственный номер: обычно это опечатка в OWNER_ID.
     return {
       error: json({
-        error: `Доступ закрыт. Приложение ждёт владельца с номером ${env.OWNER_ID}, а вошёл ${result.user.id}.`,
+        error: WHY_REFUSED[result.reason] ?? "Telegram не подтвердил вход.",
+        reason: result.reason,
+        fields: result.fields ?? null,
+      }, 401),
+    };
+  }
+
+  // Доступ открывается кодом приглашения в боте, а не самим фактом входа.
+  const account = await getUser(env.DB, result.user.id);
+  if (!account) {
+    return {
+      error: json({
+        error: "Доступа пока нет. Напиши боту код приглашения — и возвращайся.",
+        reason: "no_invite",
       }, 403),
     };
   }
-  return { user: result.user };
+
+  return { account };
 }
 
 async function readJson(request) {
@@ -73,10 +78,12 @@ async function readJson(request) {
   }
 }
 
-/**
- * Один раз на адрес: приложение представляется Telegram само.
- * Отметка в базе не даёт делать это на каждый запрос.
- */
+/* ---------- API мини-аппа ---------- */
+
+function publicOrigin(env, origin) {
+  return env.APP_URL || canonicalOrigin(origin);
+}
+
 async function ensureWired(env, origin) {
   if (await getMeta(env.DB, "wired") === origin) return;
   const result = await wireBot(env, origin);
@@ -85,33 +92,38 @@ async function ensureWired(env, origin) {
 }
 
 async function handleApi(request, env, path, ctx) {
-  // Пока секреты не добавлены, важнее назвать недостающие поимённо,
-  // чем говорить «не настроено».
-  const missing = ["BOT_TOKEN", "OWNER_ID"].filter((k) => !env[k]);
-  if (missing.length) {
-    return json({ error: `Осталось добавить в настройках приложения: ${missing.join(", ")}.` }, 503);
+  if (!env.BOT_TOKEN) {
+    return json({ error: "Осталось добавить в настройках приложения: BOT_TOKEN." }, 503);
   }
+
+  await ensureSchema(env);
+
+  const appUrl = publicOrigin(env, new URL(request.url).origin);
+  ctx.waitUntil(ensureWired(env, appUrl).catch((err) => console.error("wiring failed", err)));
 
   const auth = await authorize(request, env);
   if (auth.error) return auth.error;
 
-  await ensureSchema(env);
-
-  // Телеграму можно рассказать о себе в фоне — ответ ждать не должен.
-  // Адрес берём постоянный: мини-апп могли открыть по адресу сборки.
-  const appUrl = publicOrigin(env, new URL(request.url).origin);
-  ctx.waitUntil(ensureWired(env, appUrl).catch((err) => console.error("wiring failed", err)));
-
-  const day = today(env);
+  const me = auth.account;
+  const owner = me.id;
+  const day = localDate(me.tzOffset);
   const nowIso = new Date().toISOString();
-  const state = () => getState(env.DB, day);
+  const state = () => getState(env.DB, owner, day);
+
+  const settings = () => ({
+    goals: me.goals,
+    followDays: me.followDays,
+    digestHour: me.digestHour,
+    tzOffset: me.tzOffset,
+  });
 
   if (path === "/api/state" && request.method === "GET") {
     // Словари едут только при первой загрузке: дальше мини-апп держит их у себя.
     return json({
       ...(await state()),
       today: day,
-      dict: { statuses: STATUSES, sources: SOURCES, plan: PLAN, followDays: FOLLOW_DAYS },
+      settings: settings(),
+      dict: { statuses: STATUSES, sources: SOURCES, plan: PLAN },
     });
   }
 
@@ -120,21 +132,21 @@ async function handleApi(request, env, path, ctx) {
 
   switch (path) {
     case "/api/lead": {
-      const res = await saveLead(env.DB, body.id || null, body, { today: day, nowIso });
+      const res = await saveLead(env.DB, owner, body.id || null, body, { today: day, nowIso });
       if (res.error) return json({ error: res.error }, 400);
       return json({ ...(await state()), id: res.id });
     }
 
     case "/api/lead/delete": {
       if (!body.id) return json({ error: "Не указана карточка" }, 400);
-      const res = await deleteLead(env.DB, body.id);
+      const res = await deleteLead(env.DB, owner, body.id);
       if (res.error) return json({ error: res.error }, 404);
       return json(await state());
     }
 
     case "/api/wrote": {
       if (!body.id) return json({ error: "Не указана карточка" }, 400);
-      const res = await markWrote(env.DB, body.id, { today: day });
+      const res = await markWrote(env.DB, owner, body.id, { today: day, followDays: me.followDays });
       if (res.error) return json({ error: res.error }, 400);
       return json({ ...(await state()), next: res.next });
     }
@@ -142,8 +154,24 @@ async function handleApi(request, env, path, ctx) {
     case "/api/bulk": {
       const rows = parseList(body.text || "");
       if (!rows.length) return json({ error: "Не разобрал ни одной строки" }, 400);
-      const res = await bulkAdd(env.DB, rows, { source: body.source, niche: body.niche, today: day, nowIso });
+      const res = await bulkAdd(env.DB, owner, rows, { source: body.source, niche: body.niche, today: day, nowIso });
       return json({ ...(await state()), added: res.added, skipped: res.skipped });
+    }
+
+    case "/api/settings": {
+      const updated = await saveSettings(env.DB, owner, body);
+      if (!updated) return json({ error: "Не удалось сохранить настройки" }, 400);
+      const newDay = localDate(updated.tzOffset);
+      return json({
+        ...(await getState(env.DB, owner, newDay)),
+        today: newDay,
+        settings: {
+          goals: updated.goals,
+          followDays: updated.followDays,
+          digestHour: updated.digestHour,
+          tzOffset: updated.tzOffset,
+        },
+      });
     }
 
     default:
@@ -151,24 +179,7 @@ async function handleApi(request, env, path, ctx) {
   }
 }
 
-/**
- * Адрес мини-аппа нужен боту для кнопки «Открыть CRM». Задавать его руками
- * не обязательно: Telegram стучится к нам на наш же домен — запоминаем его.
- */
-function publicOrigin(env, origin) {
-  return env.APP_URL || canonicalOrigin(origin);
-}
-
-async function resolveAppUrl(env, origin) {
-  const wanted = publicOrigin(env, origin);
-  if (env.APP_URL) return env.APP_URL;
-  const stored = await getMeta(env.DB, "app_url");
-  if (wanted && wanted !== stored) {
-    await setMeta(env.DB, "app_url", wanted);
-    return wanted;
-  }
-  return stored ?? "";
-}
+/* ---------- вебхук ---------- */
 
 async function handleWebhook(request, env, ctx) {
   // Адрес вебхука не секрет, поэтому Telegram присылает общий с нами токен.
@@ -193,15 +204,25 @@ async function handleWebhook(request, env, ctx) {
   return new Response("ok");
 }
 
+/**
+ * Адрес мини-аппа нужен боту для кнопки «Открыть CRM». Задавать его руками
+ * не обязательно: Telegram стучится к нам на наш же домен — запоминаем его.
+ */
+async function resolveAppUrl(env, origin) {
+  const wanted = publicOrigin(env, origin);
+  if (env.APP_URL) return env.APP_URL;
+  const stored = await getMeta(env.DB, "app_url");
+  if (wanted && wanted !== stored) {
+    await setMeta(env.DB, "app_url", wanted);
+    return wanted;
+  }
+  return stored ?? "";
+}
+
 /* ---------- страница состояния ---------- */
 
 const esc = (v) => String(v ?? "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
 
-/**
- * Открывается без входа и не показывает ни одного секрета — только
- * «задано / не задано» и то, что Telegram сам про нас знает. Нужна,
- * чтобы владелец мог увидеть причину молчания бота, не читая логи.
- */
 async function handleHealth(request, env) {
   const origin = publicOrigin(env, new URL(request.url).origin);
   const rows = [];
@@ -218,10 +239,12 @@ async function handleHealth(request, env) {
 
   let wired = "";
   let wireProblem = "";
+  let people = 0;
   try {
     await ensureSchema(env);
     wired = (await getMeta(env.DB, "wired")) ?? "";
-    add(true, "База отвечает");
+    people = (await listUsers(env.DB)).length;
+    add(true, "База отвечает", people === 1 ? "открыта одному человеку" : `открыта ${people} людям`);
 
     // Страницу открывают именно тогда, когда что-то не работает,
     // поэтому она не только показывает беду, но и чинит привязку.
@@ -296,25 +319,29 @@ export default {
     return new Response("Not found", { status: 404 });
   },
 
-  // Cron ходит каждый час; дайджест уходит один раз в назначенный час.
+  // Cron ходит каждый час; у каждого своё время сводки и свой часовой пояс.
   async scheduled(event, env, ctx) {
-    ctx.waitUntil(maybeSendDigest(env));
+    ctx.waitUntil(sendDueDigests(env));
   },
 };
 
-export async function maybeSendDigest(env, now = new Date()) {
+export async function sendDueDigests(env, now = new Date()) {
   await ensureSchema(env);
-  const offset = Number(env.TZ_OFFSET ?? 0);
-  const hour = Number(env.DIGEST_HOUR ?? 9);
-  if (localHour(offset, now) !== hour) return { sent: false, reason: "не тот час" };
+  const people = await listUsers(env.DB);
+  const sent = [];
 
-  const day = localDate(offset, now);
-  if ((await getMeta(env.DB, "last_digest")) === day) return { sent: false, reason: "уже отправлен" };
+  for (const person of people) {
+    if (localHour(person.tzOffset, now) !== person.digestHour) continue;
+    const day = localDate(person.tzOffset, now);
+    if (person.lastDigest === day) continue;
 
-  // Отметку ставим до отправки: лучше пропустить дайджест,
-  // чем прислать его дважды, если Telegram ответит с задержкой.
-  await setMeta(env.DB, "last_digest", day);
-  // У cron нет входящего запроса, поэтому адрес берём из того, что запомнили.
-  await sendDigest({ ...env, APP_URL: await resolveAppUrl(env, "") }, day);
-  return { sent: true };
+    // Отметку ставим до отправки: лучше пропустить сводку,
+    // чем прислать её дважды, если Telegram ответит с задержкой.
+    await markDigestSent(env.DB, person.id, day);
+    const appUrl = await resolveAppUrl(env, "");
+    await sendDigest({ ...env, APP_URL: appUrl }, person, day);
+    sent.push(person.id);
+  }
+
+  return { sent };
 }

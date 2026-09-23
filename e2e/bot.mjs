@@ -42,7 +42,31 @@ const lastText = (c) => c.filter((x) => x.method === "sendMessage").pop()?.paylo
 console.log("\n— доступ —");
 {
   const c = await send(message("Привет", 999));
-  check("чужому отказано", /доступ закрыт/i.test(lastText(c)), lastText(c));
+  check("посторонний без кода не проходит", /код не найден/i.test(lastText(c)), lastText(c));
+}
+{
+  const c = await send(message("/today", 999));
+  check("и команды ему не отвечают", /приглашени/i.test(lastText(c)), lastText(c));
+}
+
+console.log("\n— приглашения —");
+{
+  const c = await send(message("/invite Брату"));
+  const text = lastText(c);
+  const code = text.match(/<code>([a-z0-9]{6})<\/code>/)?.[1];
+  check("владелец получает код", !!code, text);
+
+  const joined = await send(message(code, 4242));
+  check("по коду открывается доступ", /доступ открыт/.test(lastText(joined)), lastText(joined));
+
+  const reused = await send(message(code, 4343));
+  check("код второй раз не работает", /уже использован/.test(lastText(reused)), lastText(reused));
+
+  const own = await send(message("Свой контакт — @only_mine", 4242));
+  check("новичок ведёт свою базу", /Добавил <b>1<\/b>/.test(lastText(own)), lastText(own));
+
+  const mine = await send(message("/today"));
+  check("в базе владельца чужого контакта нет", !/only_mine/.test(lastText(mine)), lastText(mine));
 }
 
 console.log("\n— команды —");
@@ -125,7 +149,7 @@ console.log("\n— отмена добавления —");
     update_id: ++msgId,
     callback_query: { id: "cb3", from: { id: 999 }, data: undoToken, message: { message_id: 1, chat: { id: 999 } } },
   });
-  check("чужое нажатие отклонено", c[0]?.payload.text === "Доступ закрыт", c[0]?.payload);
+  check("чужое нажатие отклонено", c[0]?.payload.text === "Доступа нет", c[0]?.payload);
 }
 
 console.log("\n— экранирование —");

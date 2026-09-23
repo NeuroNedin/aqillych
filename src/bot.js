@@ -1,9 +1,14 @@
-// Логика Telegram-бота: приём списков, утренний дайджест, быстрый статус.
+// Логика Telegram-бота: приём списков, утренняя сводка, быстрый статус,
+// а также вход по коду приглашения и раздача кодов владельцем.
 
 import { parseList, contactUrl } from "./parse.js";
-import { deriveWebhookSecret } from "./auth.js";
-import { getState, bulkAdd, getMeta, setMeta } from "./db.js";
+import {
+  getState, bulkAdd, getUser, createUser, touchUserProfile,
+  createInvite, listInvites, redeemInvite, deleteInvite, listUsers,
+  getMeta, setMeta,
+} from "./db.js";
 import { CLOSED, PLAN, SOURCE_BY_KEY, countPlan, humanDate, localDate } from "./domain.js";
+import { deriveWebhookSecret } from "./auth.js";
 
 const MAX_LIST = 10; // сколько человек показывать в сводке, прежде чем свернуть в «и ещё N»
 
@@ -54,14 +59,18 @@ function listBlock(title, leads, tailFor) {
   return `${title} — ${leads.length}:\n${shown.join("\n")}${more}`;
 }
 
-function planLine(log) {
+// Строки с целью 0 человек скрыл — их не показываем.
+const activeGoals = (person) => PLAN.filter((p) => (person.goals[p.k] ?? 0) > 0);
+
+function planLine(person, log) {
   const counts = countPlan(log);
-  return PLAN.map((p) => `${p.t.toLowerCase()} ${counts[p.k]}/${p.goal}`).join(" · ");
+  const rows = activeGoals(person);
+  if (!rows.length) return "цели не заданы";
+  return rows.map((p) => `${p.t.toLowerCase()} ${counts[p.k]}/${person.goals[p.k]}`).join(" · ");
 }
 
-// Общая сводка «что сегодня»: просрочки, касания на сегодня, очередь, план.
-async function buildStatus(env, today, { greeting = "" } = {}) {
-  const { leads, log } = await getState(env.DB, today);
+async function buildStatus(env, person, today, { greeting = "" } = {}) {
+  const { leads, log } = await getState(env.DB, person.id, today);
 
   const active = leads.filter((l) => !CLOSED.has(l.status));
   const late = active.filter((l) => l.next && l.next < today).sort((a, b) => (a.next < b.next ? -1 : 1));
@@ -89,30 +98,31 @@ async function buildStatus(env, today, { greeting = "" } = {}) {
     parts.push(`📥 Ждут первого сообщения: <b>${queue.length}</b> (${breakdown})`);
   }
 
-  parts.push(`📊 План недели: ${planLine(log)}`);
+  parts.push(`📊 План недели: ${planLine(person, log)}`);
   return parts.filter(Boolean).join("\n\n");
 }
 
-async function buildPlan(env, today) {
-  const { log } = await getState(env.DB, today);
+async function buildPlan(env, person, today) {
+  const { log } = await getState(env.DB, person.id, today);
   const counts = countPlan(log);
-  const rows = PLAN.map((p) => {
+  const rows = activeGoals(person);
+  if (!rows.length) return "Цели не заданы. Открой CRM и задай их в настройках.";
+
+  const bars = rows.map((p) => {
+    const goal = person.goals[p.k];
     const value = counts[p.k];
-    const filled = Math.min(10, Math.round((value / p.goal) * 10));
+    const filled = Math.min(10, Math.round((value / goal) * 10));
     const bar = "█".repeat(filled) + "░".repeat(10 - filled);
-    const done = value >= p.goal ? " ✓" : "";
-    return `${bar}  ${p.t} ${value}/${p.goal}${done}`;
+    return `${bar}  ${p.t} ${value}/${goal}${value >= goal ? " ✓" : ""}`;
   });
-  return `<b>План недели</b>\n<code>${rows.join("\n")}</code>`;
+  return `<b>План недели</b>\n<code>${bars.join("\n")}</code>`;
 }
 
 /* ---------- добавление списком ---------- */
 
-// Короткий ключ, под которым лежат id последней добавленной пачки,
-// чтобы «Отменить» уместилось в 64 байта callback_data.
 const undoToken = () => Math.random().toString(36).slice(2, 10);
 
-async function handleList(env, chatId, text, today) {
+async function handleList(env, person, chatId, text, today) {
   const rows = parseList(text);
   if (!rows.length) {
     await sendMessage(env, chatId, "Не разобрал ни одной строки. Формат: <code>Имя — @ник — ниша</code>, по одному человеку на строку.");
@@ -120,16 +130,17 @@ async function handleList(env, chatId, text, today) {
   }
 
   const nowIso = new Date().toISOString();
-  const { added, skipped, created } = await bulkAdd(env.DB, rows, { source: "cold", niche: "", today, nowIso });
+  const { added, skipped, created } = await bulkAdd(env.DB, person.id, rows, {
+    source: "cold", niche: "", today, nowIso,
+  });
 
   if (!added) {
     await sendMessage(env, chatId, `Все ${skipped} уже есть в базе — ничего не добавил.`);
     return;
   }
 
-  // Кнопка «Отменить» должна знать, что именно появилось.
   const token = undoToken();
-  await setMeta(env.DB, `undo:${token}`, created.map((r) => r.id).join(","));
+  await setMeta(env.DB, `undo:${person.id}:${token}`, created.map((r) => r.id).join(","));
 
   const names = created.slice(0, MAX_LIST).map((r) => `• ${esc(r.name)}`).join("\n");
   const more = created.length > MAX_LIST ? `\n<i>…и ещё ${created.length - MAX_LIST}</i>` : "";
@@ -145,8 +156,9 @@ async function handleList(env, chatId, text, today) {
   });
 }
 
-async function handleUndo(env, query, token) {
-  const stored = await getMeta(env.DB, `undo:${token}`);
+async function handleUndo(env, person, query, token) {
+  const key = `undo:${person.id}:${token}`;
+  const stored = await getMeta(env.DB, key);
   const ids = (stored || "").split(",").filter(Boolean);
 
   if (!ids.length) {
@@ -155,16 +167,64 @@ async function handleUndo(env, query, token) {
   }
 
   const placeholders = ids.map(() => "?").join(",");
-  const res = await env.DB.prepare(`DELETE FROM leads WHERE id IN (${placeholders})`).bind(...ids).run();
-  await setMeta(env.DB, `undo:${token}`, "");
+  const res = await env.DB
+    .prepare(`DELETE FROM leads WHERE owner = ? AND id IN (${placeholders})`)
+    .bind(person.id, ...ids)
+    .run();
+  await setMeta(env.DB, key, "");
 
-  await callTelegram(env, "answerCallbackQuery", { callback_query_id: query.id, text: `Убрал ${res.meta?.changes ?? 0}` });
+  const removed = res.meta?.changes ?? 0;
+  await callTelegram(env, "answerCallbackQuery", { callback_query_id: query.id, text: `Убрал ${removed}` });
   await callTelegram(env, "editMessageText", {
     chat_id: query.message.chat.id,
     message_id: query.message.message_id,
-    text: `↩️ Отменено: убрал ${res.meta?.changes ?? 0} из базы.`,
+    text: `↩️ Отменено: убрал ${removed} из базы.`,
     parse_mode: "HTML",
   });
+}
+
+/* ---------- приглашения ---------- */
+
+// Без похожих символов: код диктуют голосом и набирают с телефона.
+const CODE_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789";
+
+function makeCode(length = 6) {
+  const bytes = new Uint8Array(length);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (b) => CODE_ALPHABET[b % CODE_ALPHABET.length]).join("");
+}
+
+const isOwner = (env, id) => String(id) === String(env.OWNER_ID);
+
+async function handleInvite(env, chatId, args, today) {
+  // Формат: /invite [сколько человек] [заметка]
+  const parts = args.trim().split(/\s+/).filter(Boolean);
+  let maxUses = 1;
+  if (parts.length && /^\d+$/.test(parts[0])) maxUses = Math.min(100, Math.max(1, Number(parts.shift())));
+  const note = parts.join(" ");
+
+  const code = makeCode();
+  await createInvite(env.DB, { code, note, maxUses, today });
+
+  const forWhom = note ? ` для «${esc(note)}»` : "";
+  const uses = maxUses === 1 ? "на одного человека" : `на ${maxUses} человек`;
+  await sendMessage(env, chatId,
+    `Код${forWhom} ${uses}:\n\n<code>${code}</code>\n\n` +
+    `Перешли его так: «Открой @${env.BOT_USERNAME || "бота"} и отправь ему <code>${code}</code>».`);
+}
+
+async function handlePeople(env, chatId) {
+  const [people, invites] = await Promise.all([listUsers(env.DB), listInvites(env.DB)]);
+  const lines = people.map((p) => {
+    const who = p.username ? `@${esc(p.username)}` : esc(p.name || p.id);
+    const mark = p.invitedBy === "owner" ? " · владелец" : "";
+    return `• ${who}${mark}`;
+  });
+  const free = invites.filter((i) => i.used < i.max_uses);
+  const freeLine = free.length
+    ? `\n\nНеиспользованные коды:\n${free.map((i) => `<code>${i.code}</code>${i.note ? ` — ${esc(i.note)}` : ""} (${i.max_uses - i.used} из ${i.max_uses})`).join("\n")}`
+    : "\n\nСвободных кодов нет. Создать: /invite";
+  await sendMessage(env, chatId, `<b>Пользуются CRM — ${people.length}</b>\n${lines.join("\n")}${freeLine}`);
 }
 
 /* ---------- роутинг ---------- */
@@ -182,20 +242,27 @@ const HELP = `Я держу твою базу потенциальных кли�
 /plan — прогресс по неделе
 /help — эта справка
 
-Каждое утро присылаю сводку сам.`;
+Цели недели, время сводки и прочее меняются в самой CRM, в настройках.`;
+
+const OWNER_HELP = `\n\n<b>Для владельца</b>\n/invite — выдать код доступа\n/people — кто пользуется`;
+
+async function greetStranger(env, chatId) {
+  await sendMessage(env, chatId,
+    "Это личная CRM для работы с клиентами.\n\n" +
+    "Доступ открывается по коду приглашения — пришли его сюда одним сообщением.\n" +
+    "Если кода нет, попроси у того, кто дал тебе ссылку на бота.");
+}
 
 export async function handleUpdate(env, update) {
-  const ownerId = Number(env.OWNER_ID);
-  const today = localDate(Number(env.TZ_OFFSET ?? 0));
-
   if (update.callback_query) {
     const query = update.callback_query;
-    if (query.from?.id !== ownerId) {
-      await callTelegram(env, "answerCallbackQuery", { callback_query_id: query.id, text: "Доступ закрыт" });
+    const person = await getUser(env.DB, query.from?.id);
+    if (!person) {
+      await callTelegram(env, "answerCallbackQuery", { callback_query_id: query.id, text: "Доступа нет" });
       return;
     }
     const data = String(query.data || "");
-    if (data.startsWith("undo:")) await handleUndo(env, query, data.slice(5));
+    if (data.startsWith("undo:")) await handleUndo(env, person, query, data.slice(5));
     else await callTelegram(env, "answerCallbackQuery", { callback_query_id: query.id });
     return;
   }
@@ -204,32 +271,78 @@ export async function handleUpdate(env, update) {
   if (!message) return;
 
   const chatId = message.chat.id;
-  if (message.from?.id !== ownerId) {
-    await sendMessage(env, chatId, "Этот бот личный — доступ закрыт.");
-    return;
+  const from = message.from ?? {};
+  const text = (message.text ?? message.caption ?? "").trim();
+  const command = text.match(/^\/([a-z_]+)/i)?.[1]?.toLowerCase();
+  const args = command ? text.slice(command.length + 1).trim() : "";
+
+  let person = await getUser(env.DB, from.id);
+
+  // Первый вход: владелец проходит без кода, остальные — по приглашению.
+  if (!person) {
+    const today = localDate(Number(env.TZ_OFFSET ?? 0));
+
+    if (isOwner(env, from.id)) {
+      person = await createUser(env.DB, {
+        id: from.id, name: from.first_name, username: from.username, invitedBy: "owner", today,
+      });
+    } else if (command) {
+      await greetStranger(env, chatId);
+      return;
+    } else {
+      const redeemed = await redeemInvite(env.DB, text);
+      if (!redeemed.ok) {
+        await sendMessage(env, chatId, `Не подошло: ${redeemed.reason}. Пришли код одним сообщением, без лишних слов.`);
+        return;
+      }
+      person = await createUser(env.DB, {
+        id: from.id, name: from.first_name, username: from.username, invitedBy: redeemed.code, today,
+      });
+      await sendMessage(env, chatId, `Готово, доступ открыт.\n\n${HELP}`, { reply_markup: openButton(env) });
+      return;
+    }
   }
 
-  const text = (message.text ?? message.caption ?? "").trim();
+  // Имя и ник могли поменяться — держим их свежими для списка владельца.
+  if (from.username !== person.username || from.first_name !== person.name) {
+    await touchUserProfile(env.DB, person.id, { name: from.first_name, username: from.username });
+  }
+
+  const today = localDate(person.tzOffset);
+  const owner = isOwner(env, from.id);
+
   if (!text) {
     await sendMessage(env, chatId, "Жду список людей текстом. /help — как это выглядит.");
     return;
   }
 
-  const command = text.match(/^\/([a-z_]+)/i)?.[1]?.toLowerCase();
-
   switch (command) {
     case "start":
-      await sendMessage(env, chatId, `Готов к работе.\n\n${HELP}`, { reply_markup: openButton(env) });
+      await sendMessage(env, chatId, `Готов к работе.\n\n${HELP}${owner ? OWNER_HELP : ""}`, { reply_markup: openButton(env) });
       return;
     case "help":
-      await sendMessage(env, chatId, HELP, { reply_markup: openButton(env) });
+      await sendMessage(env, chatId, `${HELP}${owner ? OWNER_HELP : ""}`, { reply_markup: openButton(env) });
       return;
     case "today":
-      await sendMessage(env, chatId, await buildStatus(env, today), { reply_markup: openButton(env) });
+      await sendMessage(env, chatId, await buildStatus(env, person, today), { reply_markup: openButton(env) });
       return;
     case "plan":
-      await sendMessage(env, chatId, await buildPlan(env, today), { reply_markup: openButton(env) });
+      await sendMessage(env, chatId, await buildPlan(env, person, today), { reply_markup: openButton(env) });
       return;
+    case "invite":
+      if (!owner) { await sendMessage(env, chatId, "Коды выдаёт только владелец."); return; }
+      await handleInvite(env, chatId, args, today);
+      return;
+    case "people":
+      if (!owner) { await sendMessage(env, chatId, "Это команда владельца."); return; }
+      await handlePeople(env, chatId);
+      return;
+    case "revoke": {
+      if (!owner) { await sendMessage(env, chatId, "Это команда владельца."); return; }
+      const res = await deleteInvite(env.DB, args);
+      await sendMessage(env, chatId, res.deleted ? "Код отозван." : "Такого кода нет.");
+      return;
+    }
     default:
       if (command) {
         await sendMessage(env, chatId, "Не знаю такой команды. /help — что я умею.");
@@ -237,7 +350,7 @@ export async function handleUpdate(env, update) {
       }
   }
 
-  await handleList(env, chatId, text, today);
+  await handleList(env, person, chatId, text, today);
 }
 
 /* ---------- привязка бота к приложению ---------- */
@@ -258,7 +371,6 @@ export async function wireBot(env, origin) {
     secret_token: secret,
     allowed_updates: ["message", "edited_message", "callback_query"],
   });
-  // Без успешного вебхука бот бесполезен, поэтому дальше идём только при нём.
   if (!webhook?.ok) return { wired: false, reason: webhook?.description ?? "Telegram отказал" };
 
   await callTelegram(env, "setChatMenuButton", {
@@ -293,10 +405,10 @@ export async function botStatus(env) {
   };
 }
 
-/* ---------- утренний дайджест ---------- */
+/* ---------- утренняя сводка ---------- */
 
-export async function sendDigest(env, today) {
+export async function sendDigest(env, person, today) {
   const greeting = `Доброе утро. Сегодня ${humanDate(today, today)}.`;
-  const text = await buildStatus(env, today, { greeting });
-  await sendMessage(env, env.OWNER_ID, text, { reply_markup: openButton(env, "Открыть CRM") });
+  const text = await buildStatus(env, person, today, { greeting });
+  await sendMessage(env, person.id, text, { reply_markup: openButton(env, "Открыть CRM") });
 }

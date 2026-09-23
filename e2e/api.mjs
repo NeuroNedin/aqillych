@@ -35,8 +35,7 @@ console.log("\n— доступ —");
 {
   const r = await api("/api/state", null, 999);
   check("чужой telegram id → 403", r.status === 403, r.status);
-  check("видно, чей номер ждали и чей пришёл",
-    /555/.test(r.data.error || "") && /999/.test(r.data.error || ""), r.data.error);
+  check("подсказывает, что нужен код приглашения", /код приглашения/.test(r.data.error || ""), r.data.error);
 }
 {
   const res = await fetch(`${BASE}/api/state`, { headers: { "x-init-data": "user=%7B%22id%22%3A555%7D&hash=deadbeef&auth_date=1" } });
@@ -104,6 +103,34 @@ check("state отдаёт 200", start.status === 200, start.data);
 check("приходят словари", !!start.data.dict?.statuses?.length);
 check("приходит серверное «сегодня»", /^\d{4}-\d{2}-\d{2}$/.test(start.data.today || ""), start.data.today);
 const startCount = start.data.leads.length;
+
+console.log("\n— настройки —");
+{
+  const before = await api("/api/state");
+  check("настройки приходят с состоянием", !!before.data.settings, before.data);
+  check("цели по умолчанию", before.data.settings.goals.cold === 30, before.data.settings);
+  check("напоминание по умолчанию через 3 дня", before.data.settings.followDays === 3);
+
+  const saved = await api("/api/settings", {
+    goals: { partner: 5, cold: 50, call: 0, prepay: 2 },
+    followDays: 7, digestHour: 8, tzOffset: 180,
+  });
+  check("сохранение отдаёт 200", saved.status === 200, saved.data);
+  check("цели изменились", saved.data.settings.goals.cold === 50, saved.data.settings);
+  check("строку можно скрыть нулём", saved.data.settings.goals.call === 0);
+  check("часовой пояс применился к «сегодня»", /^\d{4}-\d{2}-\d{2}$/.test(saved.data.today), saved.data.today);
+
+  const bad = await api("/api/settings", { goals: { cold: -5, partner: 9999 }, followDays: 999, digestHour: 99, tzOffset: 99999 });
+  check("мусорные значения обрезаются, а не ломают", bad.status === 200, bad.data);
+  check("отрицательная цель становится нулём", bad.data.settings.goals.cold === 0, bad.data.settings.goals);
+  check("слишком большая цель обрезается", bad.data.settings.goals.partner === 999, bad.data.settings.goals);
+  check("дни напоминания в разумных пределах", bad.data.settings.followDays === 60, bad.data.settings.followDays);
+  check("час сводки в пределах суток", bad.data.settings.digestHour === 23, bad.data.settings.digestHour);
+
+  // Возвращаем обычные значения, чтобы следующие проверки шли от них.
+  const back = await api("/api/settings", { goals: { partner: 3, cold: 30, call: 2, prepay: 1 }, followDays: 3, digestHour: 9, tzOffset: 300 });
+  check("настройки вернулись к обычным", back.data.settings.followDays === 3);
+}
 
 console.log("\n— добавление списком —");
 const bulkText = [

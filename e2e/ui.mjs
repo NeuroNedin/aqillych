@@ -138,6 +138,43 @@ await page.waitForSelector("#bulkDlg", { state: "hidden", timeout: 5000 });
 await page.waitForTimeout(400);
 check("добавлены новые, дубль отсеян", (await page.textContent(".toast")).includes("Добавлено: 2") && (await page.textContent(".toast")).includes("уже были в базе: 1"), await page.textContent(".toast"));
 
+console.log("\n— настройки —");
+await page.click("#tab-work");
+await page.waitForSelector("#view-work:not([hidden])");
+await page.click("#openSettings");
+await page.waitForSelector("#setDlg[open]");
+check("цели подставлены из базы", (await page.inputValue('[data-goal="cold"]')) === "30");
+check("все четыре строки плана видны", (await page.locator("#goals .goal").count()) === 4);
+
+await page.fill('[data-goal="cold"]', "50");
+await page.fill('[data-goal="partner"]', "0");
+await page.fill("#s-follow", "5");
+await page.selectOption("#s-hour", "7");
+await page.click("#setSave");
+await page.waitForSelector("#setDlg", { state: "hidden", timeout: 5000 });
+await page.waitForTimeout(400);
+
+check("новая цель показана в плане", (await page.textContent("#plan")).includes("/ 50"), await page.textContent("#plan"));
+check("строка с нулём скрыта", !(await page.textContent("#plan")).includes("Партнёры"), await page.textContent("#plan"));
+check("осталось три строки", (await page.locator("#plan .meter").count()) === 3);
+
+await page.reload({ waitUntil: "networkidle" });
+await page.waitForSelector("#app:not([hidden])");
+await page.click("#tab-work");
+await page.waitForSelector("#view-work:not([hidden])");
+check("настройки пережили перезагрузку", (await page.textContent("#plan")).includes("/ 50"));
+
+await page.click("#openSettings");
+await page.waitForSelector("#setDlg[open]");
+check("дни напоминания сохранились", (await page.inputValue("#s-follow")) === "5");
+check("час сводки сохранился", (await page.inputValue("#s-hour")) === "7");
+await page.click("#tzAuto");
+check("часовой пояс берётся с устройства",
+  (await page.inputValue("#s-tz")) === String(-new Date().getTimezoneOffset()), await page.inputValue("#s-tz"));
+await page.click("#setCancel");
+await page.waitForSelector("#setDlg", { state: "hidden" });
+await page.screenshot({ path: `${OUT}/settings.png`, fullPage: true });
+
 console.log("\n— тёмная тема —");
 await page.evaluate(() => { document.documentElement.dataset.theme = "dark"; });
 await page.waitForTimeout(200);
